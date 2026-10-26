@@ -479,10 +479,7 @@ watch(autoOn, (on) => {
       <div class="vignette" aria-hidden="true" />
 
       <div class="camera-top">
-        <div class="brand">
-          <span class="brand-mark" aria-hidden="true" />
-          <span class="brand-name">Scano</span>
-        </div>
+        <div class="brand"><span class="brand-name">Scano</span></div>
 
         <div class="camera-top-right">
           <button
