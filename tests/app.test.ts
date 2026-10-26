@@ -160,7 +160,7 @@ describe("capture without a page", () => {
 
     expect(wrapper.find(".editor").exists()).toBe(true);
     expect(wrapper.find(".corner-editor").exists()).toBe(true);
-    expect(wrapper.find(".auto-pill").text()).toContain("Detect page");
+    expect(wrapper.find(".auto-pill").text()).toContain("Find the page");
     wrapper.unmount();
   });
 
@@ -204,25 +204,51 @@ describe("capture without a page", () => {
 });
 
 describe("editor", () => {
-  it("switches the look from the labelled dock", async () => {
+  it("has one Optimize switch, on by default, and it toggles", async () => {
     stubDemoFetch();
     const wrapper = mount(App);
     await tick(20);
     await shootDemo(wrapper);
     await choose(wrapper, "Crop it by hand");
 
-    const looks = wrapper.findAll("button.look");
-    expect(looks.length).toBe(3);
-    expect(looks.map((l) => l.text())).toEqual(["B/W", "Grey", "Colour"]);
-    // a plain segmented control: text only, no thumbnail hunt
-    expect(wrapper.findAll("button.look img")).toHaveLength(0);
+    const button = wrapper.find("button.optimize");
+    expect(button.exists()).toBe(true);
+    expect(button.text()).toContain("Optimize");
+    // crisp text is the point of a scanner, so it starts on
+    expect(scan.pages[0].opts.optimize).toBe(true);
+    expect(button.attributes("aria-pressed")).toBe("true");
+    expect(button.classes()).toContain("on");
+    expect(button.text()).toContain("On");
 
-    const gray = wrapper.find("button.look.gray");
-    await gray.trigger("click");
-    await tick(200);
+    await button.trigger("click");
+    await tick(300);
 
-    expect(scan.pages[0].opts.mode).toBe("gray");
-    expect(gray.classes()).toContain("active");
+    expect(scan.pages[0].opts.optimize).toBe(false);
+    expect(button.attributes("aria-pressed")).toBe("false");
+    expect(button.text()).toContain("Off");
+
+    await button.trigger("click");
+    await tick(300);
+    expect(scan.pages[0].opts.optimize).toBe(true);
+    wrapper.unmount();
+  });
+
+  it("does no image work while the corner tool is open", async () => {
+    stubDemoFetch();
+    const wrapper = mount(App);
+    await tick(20);
+    await shootDemo(wrapper);
+    await choose(wrapper, "Crop it by hand");
+
+    const editor = wrapper.findComponent({ name: "CornerEditor" });
+    const before = scan.pages[0].result;
+    const next = scan.pages[0].quad.map((p) => ({ x: p.x * 0.9, y: p.y * 0.9 }));
+    editor.vm.$emit("update:quad", next);
+    await editor.vm.$emit("commit");
+    await tick(120);
+
+    // dragging must not trigger a warp per finger lift
+    expect(scan.pages[0].result).toBe(before);
     wrapper.unmount();
   });
 

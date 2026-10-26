@@ -2,9 +2,9 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import CornerEditor from "./CornerEditor.vue";
 import Icon from "./Icon.vue";
-import type { Mode, Quad } from "../lib/cv";
+import type { Quad } from "../lib/cv";
 import { canvasFor, containFit } from "../lib/image";
-import { activePage, autoDetect, processPage, scan } from "../lib/store";
+import { activePage, autoDetect, CROP_MAX, PREVIEW_MAX, processPage, scan } from "../lib/store";
 
 const props = withDefaults(
   defineProps<{ initialMode?: "result" | "frame"; notice?: string | null }>(),
@@ -21,14 +21,12 @@ const busy = ref(false);
 const stage = ref<HTMLDivElement | null>(null);
 const resultCanvas = ref<HTMLCanvasElement | null>(null);
 const pageIndex = computed(() => scan.pages.findIndex((p) => p.id === scan.activeId) + 1);
-
-const modes: { id: Mode; label: string; short: string; hint: string }[] = [
-  { id: "bw", label: "Black & white", short: "B/W", hint: "Crisp text on clean white paper" },
-  { id: "gray", label: "Soft grey", short: "Grey", hint: "Keeps shading, gentler on photos" },
-  { id: "color", label: "Original colour", short: "Colour", hint: "Stamps, highlighting and logos" },
-];
+const optimizing = computed(() => page.value?.opts.optimize ?? true);
 
 let observer: ResizeObserver | null = null;
+let drawFrame = 0;
+/** Bumped per reprocess so a slower, older pass cannot overwrite a newer one. */
+let generation = 0;
 
 /* -------------------------------------------------------------- result view */
 
@@ -42,9 +40,16 @@ function drawResult() {
   const pad = 26;
   if (!rect.width || !rect.height) return;
 
-  const fit = containFit(img.width, img.height, Math.max(40, rect.width - pad), Math.max(40, rect.height - pad));
+  const fit = containFit(
+    img.width,
+    img.height,
+    Math.max(40, rect.width - pad),
+    Math.max(40, rect.height - pad)
+  );
   const cssW = Math.max(1, Math.round(img.width * fit.scale));
   const cssH = Math.max(1, Math.round(img.height * fit.scale));
+  // 2x is plenty for a page that is never wider than the screen; 3x triples
+  // the canvas memory for a difference nobody can see
   const dpr = Math.min(2, window.devicePixelRatio || 1);
 
   el.style.width = `${cssW}px`;
@@ -61,42 +66,76 @@ function drawResult() {
   ctx.drawImage(canvasFor(img), 0, 0, cssW, cssH);
 }
 
-async function reprocess(options: { rewriteWarp?: boolean } = {}) {
+function queueDraw() {
+  if (drawFrame) return;
+  drawFrame = requestAnimationFrame(() => {
+    drawFrame = 0;
+    if (mode.value === "result") drawResult();
+  });
+}
+
+/**
+ * One reprocess at a time. `busy` is what the little spinner shows, and the
+ * generation counter makes sure a fast toggle back does not end up displaying
+ * the slower pass that started earlier.
+ */
+async function reprocess(options: { rewriteWarp?: boolean; maxSide?: number; full?: boolean } = {}) {
   const current = page.value;
   if (!current) return;
+  const mine = ++generation;
   busy.value = true;
   try {
-    await processPage(current, { full: true, rewriteWarp: options.rewriteWarp });
+    await processPage(current, {
+      full: options.full ?? true,
+      rewriteWarp: options.rewriteWarp,
+      maxSide: options.maxSide ?? PREVIEW_MAX,
+    });
+    if (mine !== generation) return;
     await nextTick();
-    drawResult();
+    queueDraw();
   } finally {
-    busy.value = false;
+    if (mine === generation) busy.value = false;
   }
 }
 
-function setMode(next: Mode) {
+async function setOptimize(next: boolean) {
   const current = page.value;
-  if (!current || current.opts.mode === next) return;
-  current.opts.mode = next;
-  void reprocess();
+  if (!current || current.opts.optimize === next) return;
+  current.opts.optimize = next;
+  await reprocess({});
+}
+
+async function toggleOptimize() {
+  await setOptimize(!optimizing.value);
 }
 
 function toggleFrame() {
   mode.value = mode.value === "result" ? "frame" : "result";
-  if (mode.value === "result") {
-    void nextTick(drawResult);
+  if (mode.value === "frame") {
+    // the corner tool works on the photo; nothing to render yet
+    notice.value = null;
+  } else {
+    // leaving the crop tool: this is the one pass that has to be at full preview
+    void reprocess({ rewriteWarp: true });
   }
 }
 
+/**
+ * Dragging a corner must not cost a warp per finger lift. The result canvas is
+ * hidden while the frame tool is open, so the work is deferred until the user
+ * leaves the tool — one pass instead of one per gesture.
+ */
 function onQuad(next: Quad) {
   const current = page.value;
   if (!current) return;
   current.quad = next;
   current.warped = null;
+  current.warpedSide = 0;
+  current.cacheKey = "";
 }
 
-async function onCommit() {
-  await reprocess({ rewriteWarp: true });
+function onCommit() {
+  /* intentionally empty: see onQuad */
 }
 
 async function runAuto() {
@@ -105,12 +144,12 @@ async function runAuto() {
   busy.value = true;
   try {
     const found = autoDetect(current);
-    await processPage(current, { full: true, rewriteWarp: true });
-    await nextTick();
-    if (!found) {
+    if (found) {
+      await reprocess({ rewriteWarp: true, maxSide: CROP_MAX, full: false });
       mode.value = "frame";
+      notice.value = "Page found — drag a corner to adjust";
     } else {
-      drawResult();
+      notice.value = "No page edge found — drag the corners";
     }
   } finally {
     busy.value = false;
@@ -119,7 +158,7 @@ async function runAuto() {
 
 watch(
   () => page.value?.result,
-  () => nextTick(drawResult)
+  () => queueDraw()
 );
 
 watch(
@@ -137,19 +176,17 @@ watch(
   async () => {
     mode.value = "result";
     if (!page.value?.result) await reprocess({ rewriteWarp: true });
-    else await nextTick(drawResult);
+    else await nextTick(queueDraw);
   }
 );
 
 onMounted(async () => {
-  observer = new ResizeObserver(() => {
-    if (mode.value === "result") drawResult();
-  });
+  observer = new ResizeObserver(() => queueDraw());
   if (stage.value) observer.observe(stage.value);
-  if (page.value && !page.value.result) {
+  if (page.value && (!page.value.result || page.value.warpedSide !== PREVIEW_MAX)) {
     await reprocess({ rewriteWarp: true });
   } else {
-    await nextTick(drawResult);
+    await nextTick(queueDraw);
   }
   if (props.notice) {
     window.clearTimeout(noticeTimer);
@@ -159,6 +196,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   observer?.disconnect();
+  if (drawFrame) cancelAnimationFrame(drawFrame);
   window.clearTimeout(noticeTimer);
 });
 
@@ -207,7 +245,7 @@ defineExpose({ openFrame: () => (mode.value = "frame") });
 
       <button v-if="mode === 'frame'" class="auto-pill" @click="runAuto">
         <Icon name="auto" :size="18" />
-        <span>Detect page</span>
+        <span>Find the page</span>
       </button>
 
       <Transition name="fade">
@@ -218,20 +256,22 @@ defineExpose({ openFrame: () => (mode.value = "frame") });
     </div>
 
     <footer class="editor-dock">
-      <div class="looks" role="group" aria-label="Look">
-        <button
-          v-for="m in modes"
-          :key="m.id"
-          class="look"
-          :class="[m.id, { active: page.opts.mode === m.id }]"
-          :aria-pressed="page.opts.mode === m.id"
-          :aria-label="m.label"
-          :title="m.hint"
-          @click="setMode(m.id)"
-        >
-          <span class="look-label">{{ m.short }}</span>
-        </button>
-      </div>
+      <button
+        class="optimize"
+        :class="{ on: optimizing }"
+        :aria-pressed="optimizing"
+        aria-label="Optimize this page"
+        @click="toggleOptimize"
+      >
+        <span class="optimize-icon" aria-hidden="true">
+          <Icon name="sparkle" :size="20" :stroke="1.9" />
+        </span>
+        <span class="optimize-text">
+          <strong>Optimize</strong>
+          <small>{{ optimizing ? "On · crisp text, white paper" : "Off · photo as taken" }}</small>
+        </span>
+        <span class="optimize-switch" aria-hidden="true"><span /></span>
+      </button>
 
       <button class="done" aria-label="Done with this page" @click="emit('done')">
         <Icon name="check" :size="20" :stroke="2.4" />

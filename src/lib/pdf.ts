@@ -1,7 +1,7 @@
 import { jsPDF } from "jspdf";
 import { enhance, insetQuad, outputSize, warp } from "./cv";
 import { imageDataToCanvas, nextFrame, slug } from "./image";
-import { EXPORT_MAX, type Page } from "./store";
+import { EXPORT_MAX, modeFor, type Page } from "./store";
 
 export type PageFormat = "a4" | "letter" | "fit";
 
@@ -88,9 +88,14 @@ export async function exportPdf(
     const quad = insetQuad(page.quad, 0.005);
     const size = outputSize(quad, EXPORT_MAX);
     const warped = warp(page.src, quad, size.w, size.h);
-    const result = enhance(warped, page.opts);
-    // 0.94 keeps text crisp without doubling the file size
-    const dataUrl = imageDataToCanvas(result).toDataURL("image/jpeg", 0.94);
+    const result = enhance(warped, {
+      mode: modeFor(page.opts),
+      brightness: 0,
+      contrast: 0,
+      strength: 58,
+    });
+    // 0.95 with no chroma detail to speak of: honest text, small file
+    const dataUrl = imageDataToCanvas(result).toDataURL("image/jpeg", 0.95);
 
     const paper =
       format === "fit"

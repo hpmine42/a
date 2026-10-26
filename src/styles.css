@@ -81,7 +81,7 @@ button {
    decorative chips included, so a stray drag cannot leave a blue selection. */
 .brand,
 .dock-label,
-.look-label,
+.optimize-text,
 .zoom-chip,
 .zoom-value,
 .paper,
@@ -1006,57 +1006,122 @@ img {
     calc(16px * var(--u) + env(safe-area-inset-bottom, 0px));
 }
 
-/* One row, three words, the chosen one lit. No thumbnails: three tiny copies of
-   the same page read as a bug, not as a choice. */
-.looks {
-  display: flex;
+/* One switch for the whole look. On = flat light, black text on white paper;
+   off = the photo exactly as it came. The switch is the readout, so there is
+   nothing to hunt and nothing to compare side by side. */
+.optimize {
   flex: 1 1 auto;
   min-width: 0;
-  gap: calc(4px * var(--u));
-  padding: calc(4px * var(--u));
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid var(--line);
-}
-
-.look {
-  flex: 1 1 0;
-  min-width: 0;
-  height: calc(46px * var(--u));
-  padding: 0 calc(10px * var(--u));
-  border-radius: 999px;
-  font-size: calc(13.5px * var(--u));
-  font-weight: 650;
-  letter-spacing: -0.005em;
-  color: var(--muted);
-  white-space: nowrap;
-  transition: color 0.15s var(--ease), background 0.18s var(--ease),
-    box-shadow 0.18s var(--ease), transform 0.12s var(--ease);
-}
-
-.look:hover {
+  display: flex;
+  align-items: center;
+  gap: calc(11px * var(--u));
+  height: var(--tap-lg);
+  padding: 0 calc(14px * var(--u)) 0 calc(12px * var(--u));
+  border-radius: calc(18px * var(--u));
+  text-align: left;
   color: var(--text);
-  background: rgba(255, 255, 255, 0.05);
+  background: rgba(255, 255, 255, 0.055);
+  border: 1px solid var(--line);
+  transition: background 0.18s var(--ease), border-color 0.18s var(--ease),
+    transform 0.12s var(--ease);
 }
 
-.look:active {
-  transform: scale(0.97);
+.optimize:hover {
+  background: rgba(255, 255, 255, 0.085);
 }
 
-.look.active {
+.optimize:active {
+  transform: scale(0.985);
+}
+
+.optimize.on {
+  background: linear-gradient(
+    150deg,
+    rgba(255, 192, 97, 0.16),
+    rgba(255, 192, 97, 0.07)
+  );
+  border-color: rgba(255, 192, 97, 0.4);
+}
+
+.optimize-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: calc(36px * var(--u));
+  height: calc(36px * var(--u));
+  border-radius: 50%;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.07);
+  transition: color 0.18s var(--ease), background 0.2s var(--ease),
+    box-shadow 0.2s var(--ease);
+}
+
+.optimize.on .optimize-icon {
   color: #1a1305;
   background: linear-gradient(160deg, #ffd79a, var(--amber));
-  box-shadow: 0 6px 16px rgba(255, 192, 97, 0.22);
+  box-shadow: 0 4px 14px rgba(255, 192, 97, 0.28);
 }
 
-.look.active .look-label {
-  color: inherit;
+.optimize-text {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
-.look-label {
-  display: block;
+.optimize-text strong {
+  font-size: calc(15px * var(--u));
+  font-weight: 650;
+  letter-spacing: -0.012em;
+  line-height: 1.15;
+}
+
+.optimize-text small {
+  font-size: calc(11.5px * var(--u));
+  line-height: 1.2;
+  color: var(--muted-2);
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  transition: color 0.18s var(--ease);
+}
+
+.optimize.on .optimize-text small {
+  color: rgba(255, 214, 152, 0.82);
+}
+
+.optimize-switch {
+  position: relative;
+  flex: 0 0 auto;
+  width: calc(42px * var(--u));
+  height: calc(26px * var(--u));
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.13);
+  transition: background 0.2s var(--ease);
+}
+
+.optimize-switch span {
+  position: absolute;
+  top: 50%;
+  left: calc(3px * var(--u));
+  width: calc(20px * var(--u));
+  height: calc(20px * var(--u));
+  margin-top: calc(-10px * var(--u));
+  border-radius: 50%;
+  background: #dfe4ea;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+  transition: transform 0.2s var(--ease), background 0.2s var(--ease);
+}
+
+.optimize.on .optimize-switch {
+  background: rgba(255, 192, 97, 0.9);
+}
+
+.optimize.on .optimize-switch span {
+  transform: translateX(calc(16px * var(--u)));
+  background: #241a08;
 }
 
 .done {
@@ -1491,9 +1556,12 @@ html[data-fit="boost"] body {
 /* Short viewports (landscape phones, small windows): keep the stage usable. */
 /* Very narrow phones: the dock has to stay on one line. */
 @media (max-width: 360px) {
-  .look {
-    padding: 0 calc(6px * var(--u));
-    font-size: calc(12.5px * var(--u));
+  .optimize {
+    padding-right: calc(10px * var(--u));
+  }
+
+  .optimize-text small {
+    display: none;
   }
 
   .done {
@@ -1521,8 +1589,8 @@ html[data-fit="boost"] body {
     padding: 10px 16px;
   }
 
-  .look {
-    height: calc(42px * var(--u));
+  .optimize {
+    height: calc(52px * var(--u));
   }
 
   .shutter {
