@@ -22,10 +22,10 @@ const stage = ref<HTMLDivElement | null>(null);
 const resultCanvas = ref<HTMLCanvasElement | null>(null);
 const pageIndex = computed(() => scan.pages.findIndex((p) => p.id === scan.activeId) + 1);
 
-const modes: { id: Mode; label: string; hint: string }[] = [
-  { id: "bw", label: "Black & white", hint: "Crisp text, white paper" },
-  { id: "gray", label: "Grayscale", hint: "Softer, keeps shading" },
-  { id: "color", label: "Colour", hint: "Original tones" },
+const modes: { id: Mode; label: string; short: string; hint: string }[] = [
+  { id: "bw", label: "Black & white", short: "B/W", hint: "Crisp text, white paper" },
+  { id: "gray", label: "Grayscale", short: "Gray", hint: "Softer, keeps shading" },
+  { id: "color", label: "Colour", short: "Colour", hint: "Original tones" },
 ];
 
 let observer: ResizeObserver | null = null;
@@ -168,8 +168,9 @@ defineExpose({ openFrame: () => (mode.value = "frame") });
 <template>
   <div class="editor" v-if="page">
     <header class="editor-top">
-      <button class="round" aria-label="Back to camera" @click="emit('back')">
-        <Icon name="back" :size="22" />
+      <button class="control" aria-label="Back to camera" @click="emit('back')">
+        <Icon name="back" :size="19" />
+        <span>Back</span>
       </button>
 
       <div class="editor-count" aria-live="polite">
@@ -177,13 +178,14 @@ defineExpose({ openFrame: () => (mode.value = "frame") });
       </div>
 
       <button
-        class="round"
+        class="control"
         :class="{ on: mode === 'frame' }"
         :aria-pressed="mode === 'frame'"
-        aria-label="Adjust corners"
+        aria-label="Adjust the corners"
         @click="toggleFrame"
       >
-        <Icon name="crop" :size="20" />
+        <Icon name="crop" :size="19" />
+        <span>{{ mode === 'frame' ? 'Done cropping' : 'Crop' }}</span>
       </button>
     </header>
 
@@ -204,8 +206,8 @@ defineExpose({ openFrame: () => (mode.value = "frame") });
       <p v-else-if="notice" class="frame-hint">{{ notice }}</p>
 
       <button v-if="mode === 'frame'" class="auto-pill" @click="runAuto">
-        <Icon name="auto" :size="17" />
-        <span>Auto</span>
+        <Icon name="auto" :size="18" />
+        <span>Detect page</span>
       </button>
 
       <Transition name="fade">
@@ -216,23 +218,24 @@ defineExpose({ openFrame: () => (mode.value = "frame") });
     </div>
 
     <footer class="editor-dock">
-      <div class="swatches" role="group" aria-label="Look">
+      <div class="looks" role="group" aria-label="Look">
         <button
           v-for="m in modes"
           :key="m.id"
-          class="swatch"
+          class="look"
           :class="[m.id, { active: page.opts.mode === m.id }]"
           :aria-pressed="page.opts.mode === m.id"
-          :aria-label="m.label"
           :title="m.hint"
           @click="setMode(m.id)"
         >
-          <span class="swatch-chip" />
+          <span class="look-chip" />
+          <span class="look-label">{{ m.short }}</span>
         </button>
       </div>
 
       <button class="done" aria-label="Done with this page" @click="emit('done')">
-        <Icon name="check" :size="24" :stroke="2.2" />
+        <Icon name="check" :size="20" :stroke="2.4" />
+        <span>Done</span>
       </button>
     </footer>
   </div>

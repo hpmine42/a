@@ -4,10 +4,12 @@ import CameraView from "./components/CameraView.vue";
 import CaptureReview from "./components/CaptureReview.vue";
 import EditorView from "./components/EditorView.vue";
 import PagesView from "./components/PagesView.vue";
-import { makeThumb } from "./lib/image";
-import { addPage, autoDetect, processPage, scan } from "./lib/store";
+import { detectPageQuad, fullFrameQuad, type Quad } from "./lib/cv";
+import { makeThumb, nextFrame } from "./lib/image";
+import { addPage, processPage, scan } from "./lib/store";
 
 type View = "camera" | "review" | "edit" | "pages";
+type Shot = { img: ImageData; quad: Quad | null };
 
 const view = ref<View>("camera");
 const scanning = ref(false);
@@ -16,60 +18,108 @@ const pending = ref<ImageData | null>(null);
 const editorMode = ref<"result" | "frame">("result");
 const editorNotice = ref<string | null>(null);
 
-const queue: ImageData[] = [];
-let pumping = false;
+const queue: Shot[] = [];
+let busy = false;
 
 const sleep = (ms: number) => new Promise<void>((r) => window.setTimeout(r, ms));
 
-/** Every shot lands in the review step first — auto or manual is the user's call. */
-function onCaptured(img: ImageData) {
-  queue.push(img);
+/* ---------------------------------------------------------------- capture */
+
+function onCaptured(shot: Shot) {
+  queue.push(shot);
   pump();
 }
 
+/**
+ * A shot that already has a detected quad goes straight through; a shot without
+ * one is shown to the user, who decides how to crop it. Never guess silently,
+ * never ask when the answer is already known.
+ */
 function pump() {
-  if (pumping || view.value !== "camera") return;
+  if (busy || view.value !== "camera") return;
   const next = queue.shift();
   if (!next) return;
-  pending.value = next;
-  view.value = "review";
+  if (next.quad) {
+    busy = true;
+    void applyDetected(next.img, next.quad).finally(() => {
+      busy = false;
+      pump();
+    });
+  } else {
+    pending.value = next.img;
+    view.value = "review";
+  }
 }
 
-/** Automatic path: detect, warp, enhance, then show the result. */
-async function chooseAuto() {
-  const img = pending.value;
-  if (!img) return;
-  pumping = true;
+/** Crop with a known quad, then show the result. */
+async function applyDetected(img: ImageData, quad: Quad) {
   scanThumb.value = makeThumb(img, 300, 400);
   scanning.value = true;
+  await nextFrame();
   try {
     const page = addPage(img, "scan");
-    const found = autoDetect(page);
+    page.quad = quad;
+    page.warped = null;
     await processPage(page, { full: true, rewriteWarp: true });
-    await sleep(340);
-    editorMode.value = found ? "result" : "frame";
-    editorNotice.value = found ? null : "No page edge found — drag the corners";
+    await sleep(300);
+    editorMode.value = "result";
+    editorNotice.value = null;
     view.value = "edit";
   } finally {
     scanning.value = false;
-    pending.value = null;
-    pumping = false;
+  }
+}
+
+/** Let the detector have a go on the captured photo. */
+async function chooseAuto() {
+  const img = pending.value;
+  if (!img) return;
+  pending.value = null;
+  busy = true;
+  try {
+    const quad = detectPageQuad(img, { effort: "thorough" });
+    if (quad) {
+      await applyDetected(img, quad);
+    } else {
+      const page = addPage(img, "scan");
+      page.quad = fullFrameQuad(img.width, img.height);
+      page.warped = null;
+      editorMode.value = "frame";
+      editorNotice.value = "No page edge found — crop it by hand";
+      view.value = "edit";
+    }
+  } finally {
+    busy = false;
     pump();
   }
 }
 
-/** Manual path: open the corner tool straight away, nothing is processed yet. */
+/** Manual path: the corner tool opens straight away, nothing is processed yet. */
 function chooseManual() {
   const img = pending.value;
   if (!img) return;
+  pending.value = null;
   const page = addPage(img, "scan");
-  // a detection guess is a good starting point, but it never blocks the user
-  autoDetect(page);
+  // a detection guess is a decent starting point, but it never blocks the user
+  const guess = detectPageQuad(img, { effort: "fast" });
+  page.quad = guess ?? fullFrameQuad(img.width, img.height);
+  page.warped = null;
   editorMode.value = "frame";
   editorNotice.value = null;
-  pending.value = null;
   view.value = "edit";
-  pump();
+}
+
+/** Keep the whole photo as-is. */
+function chooseWhole() {
+  const img = pending.value;
+  if (!img) return;
+  pending.value = null;
+  const page = addPage(img, "scan");
+  page.quad = fullFrameQuad(img.width, img.height);
+  page.warped = null;
+  editorMode.value = "frame";
+  editorNotice.value = "Drag the corners if you want a tighter crop";
+  view.value = "edit";
 }
 
 function retake() {
@@ -77,6 +127,8 @@ function retake() {
   view.value = "camera";
   pump();
 }
+
+/* ----------------------------------------------------------------- nav */
 
 function onEdit(id: number) {
   scan.activeId = id;
@@ -90,8 +142,7 @@ function goCamera() {
 
 function onKey(event: KeyboardEvent) {
   if (event.key !== "Escape") return;
-  if (view.value === "edit") goCamera();
-  else if (view.value === "pages") goCamera();
+  if (view.value === "edit" || view.value === "pages" || view.value === "review") goCamera();
 }
 
 onMounted(() => window.addEventListener("keydown", onKey));
@@ -117,6 +168,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
         :page-count="scan.pages.length"
         @auto="chooseAuto"
         @manual="chooseManual"
+        @whole="chooseWhole"
         @retake="retake"
       />
 
@@ -129,13 +181,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
         @done="view = 'pages'"
       />
 
-      <PagesView
-        v-else
-        key="pages"
-        @back="goCamera"
-        @edit="onEdit"
-        @add="goCamera"
-      />
+      <PagesView v-else key="pages" @back="goCamera" @edit="onEdit" @add="goCamera" />
     </Transition>
 
     <Transition name="scan">

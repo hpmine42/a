@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { mount, flushPromises, type VueWrapper } from "@vue/test-utils";
+import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 import App from "../src/App.vue";
 import { clearPages, scan } from "../src/lib/store";
 import { allowCamera, denyCamera, installDomStubs } from "./setup";
@@ -27,7 +27,6 @@ function stubDemoFetch() {
   );
 }
 
-/** Capture the demo photo and stop on the review screen. */
 async function shootDemo(wrapper: VueWrapper) {
   const demo = wrapper.findAll("button").find((b) => b.text().includes("Demo photo"));
   expect(demo, "demo photo button must exist when the camera is unavailable").toBeTruthy();
@@ -47,6 +46,7 @@ beforeEach(() => {
   denyCamera();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  delete (globalThis as unknown as { __workerQuad?: unknown }).__workerQuad;
 });
 
 describe("camera", () => {
@@ -58,77 +58,127 @@ describe("camera", () => {
     expect(wrapper.find(".shutter").exists()).toBe(true);
     expect(wrapper.text()).toContain("Choose photo");
     expect(wrapper.text()).toContain("Demo photo");
-    expect(wrapper.find(".camera-hint").exists()).toBe(true);
+    // the dock is labelled, not a row of anonymous icons
+    expect(wrapper.text()).toContain("Photos");
+    expect(wrapper.text()).toContain("Flip");
     wrapper.unmount();
   });
 
-  it("shows the detection toggle only when a stream is live, on by default", async () => {
-    const off = mount(App);
-    await tick(20);
-    expect(off.find('button[aria-label="Automatic page detection"]').exists()).toBe(false);
-    off.unmount();
-
+  it("has detection off by default and lets the user switch it on", async () => {
     allowCamera();
-
     const wrapper = mount(App);
     await tick(30);
-    const autoButton = wrapper.find('button[aria-label="Automatic page detection"]');
-    expect(autoButton.exists()).toBe(true);
-    expect(autoButton.classes()).toContain("on");
 
-    await autoButton.trigger("click");
-    expect(autoButton.classes()).not.toContain("on");
-    expect(wrapper.find(".camera-hint").text()).toContain("Detection off");
+    const detect = wrapper.find('button[aria-label="Detect the page while framing"]');
+    expect(detect.exists()).toBe(true);
+    expect(detect.classes()).not.toContain("on");
+    expect(detect.text()).toContain("Detect");
+
+    await detect.trigger("click");
+    expect(detect.classes()).toContain("on");
+    expect(wrapper.find(".camera-hint").text()).toContain("Looking for the page");
+
+    await detect.trigger("click");
+    expect(wrapper.find(".camera-hint").text()).toContain("tap the shutter");
     wrapper.unmount();
   });
 });
 
-describe("capture flow", () => {
-  it("asks how to crop before anything is processed", async () => {
+describe("capture with a known page", () => {
+  it("uses the detected quad without asking", async () => {
+    allowCamera();
+    // the worker reports this quad for every frame → the viewfinder shows it
+    (globalThis as unknown as { __workerQuad?: unknown }).__workerQuad = [
+      { x: 20, y: 20 },
+      { x: 300, y: 20 },
+      { x: 300, y: 220 },
+      { x: 20, y: 220 },
+    ];
+
+    const wrapper = mount(App);
+    await tick(60);
+    await wrapper.find('button[aria-label="Detect the page while framing"]').trigger("click");
+    await tick(80);
+    expect(wrapper.find(".camera-hint").text()).toContain("Page found");
+
+    await wrapper.find(".shutter").trigger("click");
+    await tick(700);
+
+    // no question, straight into the editor with the detected corners
+    expect(wrapper.find(".review").exists()).toBe(false);
+    expect(wrapper.find(".editor").exists()).toBe(true);
+    expect(scan.pages.length).toBe(1);
+    // detection runs on a 320px frame of a 1280px video, so the stored quad is
+    // scaled back up by 4 before it is used for the crop
+    expect(scan.pages[0].quad[0].x).toBeCloseTo(80, 0);
+    wrapper.unmount();
+  });
+
+  it("asks when nothing was detected while framing", async () => {
+    allowCamera();
+    const wrapper = mount(App);
+    await tick(40);
+    await wrapper.find(".shutter").trigger("click");
+    await tick(200);
+
+    expect(wrapper.find(".review").exists()).toBe(true);
+    expect(scan.pages.length).toBe(0);
+    wrapper.unmount();
+  });
+});
+
+describe("capture without a page", () => {
+  it("offers three ways to crop before anything is processed", async () => {
     stubDemoFetch();
     const wrapper = mount(App);
     await tick(20);
     await shootDemo(wrapper);
 
-    // the fork between automatic and manual comes first
     expect(wrapper.find(".review").exists()).toBe(true);
-    expect(wrapper.findAll("button.choice").length).toBe(2);
-    expect(wrapper.text()).toContain("Detect automatically");
-    expect(wrapper.text()).toContain("Crop manually");
-    // nothing has been added to the document yet
+    expect(wrapper.findAll("button.choice").length).toBe(3);
+    expect(wrapper.text()).toContain("No page detected");
+    expect(wrapper.text()).toContain("Crop by hand");
+    expect(wrapper.text()).toContain("Detect the page");
+    expect(wrapper.text()).toContain("Use the whole photo");
     expect(scan.pages.length).toBe(0);
     expect(wrapper.find(".editor").exists()).toBe(false);
     wrapper.unmount();
   });
 
-  it("detects automatically when that is chosen", async () => {
+  it("opens the corner tool straight away when cropping by hand", async () => {
     stubDemoFetch();
     const wrapper = mount(App);
     await tick(20);
     await shootDemo(wrapper);
-    await choose(wrapper, "Detect automatically");
+    await choose(wrapper, "Crop by hand");
 
-    expect(scan.pages.length).toBe(1);
     expect(wrapper.find(".editor").exists()).toBe(true);
-    // the stub image has no page edge, so the frame tool opens and says why
     expect(wrapper.find(".corner-editor").exists()).toBe(true);
-    expect(wrapper.find(".frame-hint").text()).toContain("No page edge");
+    expect(wrapper.find(".auto-pill").text()).toContain("Detect page");
     wrapper.unmount();
   });
 
-  it("opens the corner tool straight away for manual cropping", async () => {
+  it("falls back to manual cropping when the detector finds nothing", async () => {
     stubDemoFetch();
     const wrapper = mount(App);
     await tick(20);
     await shootDemo(wrapper);
-    await choose(wrapper, "Crop manually");
+    await choose(wrapper, "Detect the page");
+
+    expect(wrapper.find(".corner-editor").exists()).toBe(true);
+    expect(wrapper.find(".frame-hint").text()).toContain("No page edge found");
+    wrapper.unmount();
+  });
+
+  it("keeps the whole photo on request", async () => {
+    stubDemoFetch();
+    const wrapper = mount(App);
+    await tick(20);
+    await shootDemo(wrapper);
+    await choose(wrapper, "Use the whole photo");
 
     expect(scan.pages.length).toBe(1);
-    expect(wrapper.find(".editor").exists()).toBe(true);
     expect(wrapper.find(".corner-editor").exists()).toBe(true);
-    expect(wrapper.find(".auto-pill").exists()).toBe(true);
-    // no nagging notice when the choice was deliberate
-    expect(wrapper.find(".frame-hint").text()).toContain("Drag a corner");
     wrapper.unmount();
   });
 
@@ -138,23 +188,28 @@ describe("capture flow", () => {
     await tick(20);
     await shootDemo(wrapper);
 
-    await wrapper.find('button[aria-label="Discard photo"]').trigger("click");
+    await wrapper.find('button[aria-label="Discard photo and go back"]').trigger("click");
     await tick(100);
 
     expect(scan.pages.length).toBe(0);
     expect(wrapper.find(".camera").exists()).toBe(true);
     wrapper.unmount();
   });
+});
 
-  it("switches the look from the dock and keeps the choice on the page", async () => {
+describe("editor", () => {
+  it("switches the look from the labelled dock", async () => {
     stubDemoFetch();
     const wrapper = mount(App);
     await tick(20);
     await shootDemo(wrapper);
-    await choose(wrapper, "Detect automatically");
+    await choose(wrapper, "Crop by hand");
 
-    const gray = wrapper.find("button.swatch.gray");
-    expect(gray.exists()).toBe(true);
+    const looks = wrapper.findAll("button.look");
+    expect(looks.length).toBe(3);
+    expect(looks.map((l) => l.text())).toEqual(["B/W", "Gray", "Colour"]);
+
+    const gray = wrapper.find("button.look.gray");
     await gray.trigger("click");
     await tick(200);
 
@@ -168,10 +223,9 @@ describe("capture flow", () => {
     const wrapper = mount(App);
     await tick(20);
     await shootDemo(wrapper);
-    await choose(wrapper, "Crop manually");
+    await choose(wrapper, "Crop by hand");
 
     const editor = wrapper.findComponent({ name: "CornerEditor" });
-    expect(editor.exists()).toBe(true);
     const next = scan.pages[0].quad.map((p) => ({ x: p.x * 0.5, y: p.y * 0.5 }));
     editor.vm.$emit("update:quad", next);
     await editor.vm.$emit("commit");
@@ -180,39 +234,26 @@ describe("capture flow", () => {
     expect(scan.pages[0].quad[0].x).toBeCloseTo(next[0].x, 5);
     wrapper.unmount();
   });
+});
 
-  it("shows the finished pages with a PDF action", async () => {
+describe("pages", () => {
+  it("shows the finished pages with a PDF action and paper sizes", async () => {
     stubDemoFetch();
     const wrapper = mount(App);
     await tick(20);
     await shootDemo(wrapper);
-    await choose(wrapper, "Detect automatically");
-
-    const done = wrapper.find("button.done");
-    expect(done.exists()).toBe(true);
-    await done.trigger("click");
+    await choose(wrapper, "Crop by hand");
+    await wrapper.find("button.done").trigger("click");
     await tick(100);
 
     expect(wrapper.find(".pages").exists()).toBe(true);
     expect(wrapper.findAll(".page-card").length).toBe(1);
     expect(wrapper.find("button.save").text()).toContain("Save PDF");
-    wrapper.unmount();
-  });
-
-  it("remembers the chosen paper size for the export", async () => {
-    stubDemoFetch();
-    const wrapper = mount(App);
-    await tick(20);
-    await shootDemo(wrapper);
-    await choose(wrapper, "Detect automatically");
-    await wrapper.find("button.done").trigger("click");
-    await tick(100);
+    expect(wrapper.text()).toContain("Letter");
 
     const letter = wrapper.findAll("button.paper").find((b) => b.text() === "Letter");
-    expect(letter).toBeTruthy();
     await letter!.trigger("click");
     expect(scan.format).toBe("letter");
-    expect(letter!.classes()).toContain("active");
 
     scan.format = "a4";
     wrapper.unmount();
@@ -223,7 +264,7 @@ describe("capture flow", () => {
     const wrapper = mount(App);
     await tick(20);
     await shootDemo(wrapper);
-    await choose(wrapper, "Detect automatically");
+    await choose(wrapper, "Crop by hand");
     await wrapper.find("button.done").trigger("click");
     await tick(100);
 

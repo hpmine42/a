@@ -119,12 +119,38 @@ export function installDomStubs() {
   }
   g.ResizeObserver = RO;
 
+  /**
+   * Worker stub: when `__workerQuad` is set, it answers every detection request
+   * with that quad, so the "outline visible → use it" path can be exercised.
+   */
   class FakeWorker {
     onmessage: ((e: MessageEvent) => void) | null = null;
-    postMessage() {}
-    terminate() {}
+    postMessage(msg: { id: number }) {
+      const quad = (globalThis as unknown as { __workerQuad?: unknown }).__workerQuad;
+      if (!quad) return;
+      window.setTimeout(() => {
+        this.onmessage?.({ data: { id: msg.id, quad } } as MessageEvent);
+      }, 0);
+    }
+    terminate() {
+      this.onmessage = null;
+    }
   }
   g.Worker = FakeWorker;
+
+  // a video element with real dimensions, so the capture path can run
+  Object.defineProperty(HTMLVideoElement.prototype, "videoWidth", {
+    configurable: true,
+    get: () => 1280,
+  });
+  Object.defineProperty(HTMLVideoElement.prototype, "videoHeight", {
+    configurable: true,
+    get: () => 960,
+  });
+  Object.defineProperty(HTMLVideoElement.prototype, "readyState", {
+    configurable: true,
+    get: () => 4,
+  });
 
   g.requestAnimationFrame = (cb: FrameRequestCallback) => window.setTimeout(() => cb(performance.now()), 0);
   g.cancelAnimationFrame = (id: number) => window.clearTimeout(id);

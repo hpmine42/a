@@ -108,11 +108,48 @@ img {
    shared controls
    ========================================================================== */
 
+.control {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 44px;
+  padding: 0 15px;
+  border-radius: 999px;
+  font-size: 13.5px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  color: var(--text);
+  background: rgba(20, 23, 28, 0.62);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(14px) saturate(140%);
+  transition: background 0.16s var(--ease), border-color 0.16s var(--ease),
+    transform 0.12s var(--ease), color 0.16s var(--ease);
+}
+
+.control:hover {
+  background: rgba(32, 37, 45, 0.82);
+}
+
+.control:active {
+  transform: scale(0.96);
+}
+
+.control.on {
+  color: #1a1305;
+  background: linear-gradient(160deg, #ffd79a, var(--amber));
+  border-color: transparent;
+}
+
+.control.danger:hover {
+  color: var(--danger);
+  border-color: rgba(255, 122, 107, 0.45);
+}
+
 .round {
   display: grid;
   place-items: center;
-  width: 44px;
-  height: 44px;
+  width: 48px;
+  height: 48px;
   border-radius: 50%;
   color: var(--text);
   background: rgba(20, 23, 28, 0.62);
@@ -181,17 +218,14 @@ img {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  gap: 6px;
-  padding: 8px 8px 0;
+  gap: clamp(4px, 1.2vh, 10px);
+  padding: 6px 6px 0;
 }
 
 .camera-stage {
   position: relative;
   flex: 1 1 auto;
   min-height: 0;
-  /* a viewfinder should never collapse into a narrow vertical slice */
-  max-height: min(100%, 132vw);
   border-radius: var(--radius-stage);
   overflow: hidden;
   background: #050607;
@@ -340,28 +374,42 @@ img {
   grid-template-columns: 1fr auto 1fr;
   align-items: center;
   gap: 8px;
-  padding: 18px 22px 8px;
+  padding: clamp(8px, 2vh, 18px) clamp(14px, 5vw, 24px) 4px;
 }
 
-.dock-slot {
+.dock-action {
   display: grid;
-  place-items: center;
+  justify-items: center;
+  gap: 6px;
+  padding: 4px;
+  border-radius: 16px;
 }
 
-.dock-slot:last-of-type {
+.dock-action:first-of-type {
+  justify-self: start;
+}
+
+.dock-action:last-of-type {
   justify-self: end;
 }
 
-.dock-slot:first-of-type {
-  justify-self: start;
+.dock-label {
+  font-size: 11.5px;
+  font-weight: 550;
+  color: var(--muted);
+  letter-spacing: 0.01em;
+}
+
+.dock-action:hover .dock-label {
+  color: var(--text);
 }
 
 .shutter {
   position: relative;
   display: grid;
   place-items: center;
-  width: 78px;
-  height: 78px;
+  width: clamp(72px, 21vw, 88px);
+  height: clamp(72px, 21vw, 88px);
   border-radius: 50%;
   transition: transform 0.14s var(--ease);
 }
@@ -376,8 +424,8 @@ img {
 
 .shutter::after {
   content: "";
-  width: 62px;
-  height: 62px;
+  width: 78%;
+  height: 78%;
   border-radius: 50%;
   background: #fff;
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
@@ -515,10 +563,21 @@ img {
 }
 
 .review-title {
-  margin: 0 0 2px;
-  font-size: 13px;
-  color: var(--muted);
+  display: grid;
+  gap: 2px;
+  margin: 0 0 4px;
   text-align: center;
+}
+
+.review-title strong {
+  font-size: 15px;
+  font-weight: 640;
+  letter-spacing: -0.01em;
+}
+
+.review-title span {
+  font-size: 12.5px;
+  color: var(--muted);
 }
 
 .choice {
@@ -526,7 +585,8 @@ img {
   align-items: center;
   gap: 13px;
   width: 100%;
-  padding: 14px 16px;
+  min-height: 62px;
+  padding: 12px 16px;
   border-radius: 16px;
   text-align: left;
   color: var(--text);
@@ -716,30 +776,30 @@ img {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 14px;
-  padding: 14px 20px calc(16px + env(safe-area-inset-bottom, 0px));
+  gap: clamp(8px, 2.4vw, 14px);
+  padding: 14px clamp(12px, 4vw, 20px) calc(16px + env(safe-area-inset-bottom, 0px));
 }
 
-.swatches {
+.looks {
   display: flex;
-  gap: 10px;
+  gap: 6px;
   padding: 5px;
-  border-radius: 999px;
+  border-radius: 18px;
   background: rgba(255, 255, 255, 0.045);
   border: 1px solid var(--line);
 }
 
-.swatch {
-  position: relative;
+.look {
   display: grid;
-  place-items: center;
-  width: 38px;
-  height: 38px;
-  border-radius: 50%;
-  transition: transform 0.14s var(--ease), box-shadow 0.18s var(--ease);
+  justify-items: center;
+  gap: 5px;
+  min-width: clamp(46px, 13vw, 60px);
+  padding: 7px 6px 6px;
+  border-radius: 13px;
+  transition: background 0.15s var(--ease), box-shadow 0.18s var(--ease);
 }
 
-.swatch-chip {
+.look-chip {
   width: 26px;
   height: 26px;
   border-radius: 50%;
@@ -747,36 +807,49 @@ img {
   transition: transform 0.16s var(--ease);
 }
 
-.swatch.bw .swatch-chip {
+.look.bw .look-chip {
   background: linear-gradient(135deg, #ffffff 0 50%, #101318 50% 100%);
 }
 
-.swatch.gray .swatch-chip {
+.look.gray .look-chip {
   background: linear-gradient(135deg, #e9ecf0, #6e747d);
 }
 
-.swatch.color .swatch-chip {
+.look.color .look-chip {
   background: linear-gradient(135deg, #ffd7a8, #8fb7ff);
 }
 
-.swatch:hover .swatch-chip {
+.look-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0.01em;
+}
+
+.look:hover .look-chip {
   transform: scale(1.06);
 }
 
-.swatch.active {
-  box-shadow: 0 0 0 2px rgba(255, 192, 97, 0.85);
+.look.active {
+  background: rgba(255, 192, 97, 0.1);
+  box-shadow: inset 0 0 0 1px rgba(255, 192, 97, 0.55);
 }
 
-.swatch.active .swatch-chip {
-  transform: scale(1.02);
+.look.active .look-label {
+  color: var(--amber);
 }
 
 .done {
-  display: grid;
-  place-items: center;
-  width: 56px;
-  height: 56px;
-  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  height: 52px;
+  padding: 0 clamp(14px, 4vw, 20px) 0 clamp(11px, 3vw, 16px);
+  border-radius: 999px;
+  font-size: 14.5px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
   color: #1a1305;
   background: linear-gradient(160deg, #ffd79a, var(--amber));
   box-shadow: 0 10px 26px rgba(255, 192, 97, 0.22);
@@ -812,8 +885,8 @@ img {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(clamp(88px, 26vw, 128px), 1fr));
+  gap: clamp(8px, 2.4vw, 14px);
   align-content: start;
   padding: 6px 16px 16px;
   overflow-y: auto;
@@ -869,12 +942,12 @@ img {
 
 .page-del {
   position: absolute;
-  top: -6px;
-  right: -6px;
+  top: -8px;
+  right: -8px;
   display: grid;
   place-items: center;
-  width: 24px;
-  height: 24px;
+  width: 30px;
+  height: 30px;
   border-radius: 50%;
   color: var(--text);
   background: #262b33;
@@ -1096,6 +1169,32 @@ img {
   .app {
     max-width: none;
     height: 100dvh;
+  }
+}
+
+/* Short viewports (landscape phones, small windows): keep the stage usable. */
+@media (max-height: 680px) {
+  .camera-dock {
+    padding-top: 4px;
+  }
+
+  .camera-hint {
+    padding-bottom: 6px;
+  }
+
+  .editor-dock,
+  .review-sheet,
+  .pages-dock {
+    padding-bottom: 10px;
+  }
+
+  .choice {
+    min-height: 54px;
+    padding: 9px 14px;
+  }
+
+  .look {
+    padding: 5px 5px 4px;
   }
 }
 
