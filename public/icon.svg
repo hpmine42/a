@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0.55" y2="1">
+      <stop offset="0" stop-color="#1a1f27"/>
+      <stop offset="1" stop-color="#07080a"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.52">
+      <stop offset="0" stop-color="#ffc061" stop-opacity="0.26"/>
+      <stop offset="0.62" stop-color="#ffc061" stop-opacity="0.06"/>
+      <stop offset="1" stop-color="#ffc061" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="paper" x1="0" y1="0" x2="0.5" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#d8dde5"/>
+    </linearGradient>
+    <linearGradient id="amber" x1="0" y1="0" x2="0.4" y2="1">
+      <stop offset="0" stop-color="#ffd79a"/>
+      <stop offset="1" stop-color="#ffb648"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" fill="url(#bg)"/>
+  <circle cx="256" cy="256" r="214" fill="url(#glow)"/>
+  <polygon points="192.4,186.3 303.7,174.6 319.6,325.7 208.3,337.4" fill="url(#paper)"/>
+  <g fill="none" stroke="url(#amber)" stroke-width="27" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M 215 163 L 163 163 L 163 215"/>
+    <path d="M 297 163 L 349 163 L 349 215"/>
+    <path d="M 297 349 L 349 349 L 349 297"/>
+    <path d="M 215 349 L 163 349 L 163 297"/>
+  </g></svg>

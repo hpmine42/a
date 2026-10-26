@@ -11,11 +11,18 @@
   <a href="../../actions/workflows/ci.yml"><img alt="CI" src="../../actions/workflows/ci.yml/badge.svg"></a>
   <img alt="Vue 3" src="https://img.shields.io/badge/Vue-3-42b883">
   <img alt="TypeScript strict" src="https://img.shields.io/badge/TypeScript-strict-3178c6">
+  <img alt="License MIT" src="https://img.shields.io/badge/license-MIT-ffc061">
+  <img alt="Works offline" src="https://img.shields.io/badge/works-offline-ffc061">
 </p>
 
 ---
 
-**Live: <https://hpmine42.github.io/scanner/>** — no install, no account.
+**Live: <https://hpmine42.github.io/scano/>** — no install, no account.
+
+> **Renaming notice.** The repository is being renamed to `scano`, so the live
+> URL moves from `hpmine42.github.io/scanner/` to `hpmine42.github.io/scano/`.
+> Old bookmarks keep working through GitHub's redirect, but the installed app
+> should be re-added from the new address.
 
 You need one page as a PDF. So you take a phone photo — crooked, grey, a shadow
 across the bottom, half the desk in frame — and every scanner app wants an
@@ -24,13 +31,21 @@ account and an upload.
 Scano does the boring part properly, in the browser, and the photo never
 leaves the device.
 
+## Why it exists
+
+Every scanner app wants an account, an upload, or a subscription — for a task
+that is a perspective transform and a threshold. Scano is that transform and
+that threshold, in ~1,200 lines of TypeScript, with the photo never leaving the
+phone. MIT, no backend, no analytics, no CDN.
+
 ## Before / after
 
 | Camera photo | Scano |
 |---|---|
 | ![](docs/before.jpg) | ![](docs/after.jpg) |
 
-Both images come from the demo photo that ships with the app.
+Both images come from the demo photo that ships with the app. Before is the raw
+camera frame — desk, shadow, skew. After is what the export produces.
 
 ## What it does
 
@@ -121,6 +136,20 @@ npm run build      # static site in dist/
 If the browser blocks camera access (or you are on desktop), the app offers
 **Demo photo** so the whole flow is still one tap away.
 
+## Structure
+
+```
+src/components/   CameraView, CaptureReview, EditorView, CornerEditor, PagesView
+src/lib/cv.ts     detection, homography warp, enhancement — no dependencies
+src/lib/pdf.ts    jsPDF layout; fitOnPage is pure and unit-tested
+src/lib/store.ts  pages, options, the preview/export resolution budgets
+src/lib/fit.ts    the UI scale that undoes a browser's desktop-mode shrink
+scripts/          test-cv.ts (real pipeline), check-dist.mjs (deploy guard)
+```
+
+Nothing in `src/lib` touches the network. The service worker only caches the
+app's own files, which is why "works offline" is a property and not a promise.
+
 ## Tests
 
 ```bash
@@ -145,12 +174,20 @@ CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs typecheck, both
 test suites and the build on every push and PR, then deploys `main` to GitHub
 Pages.
 
+## Keyboard and desktop
+
+The app is built for a thumb, but it is usable with a mouse: the corner editor
+takes a drag with the magnifier following the pointer, `Escape` goes back to the
+camera, and the desktop browser gets the same UI in a phone-sized frame (that
+frame is a `(hover: hover) and (pointer: fine)` rule, never a mobile layout).
+
 ## Roadmap
 
 - OCR layer (tesseract.js) so exported PDFs are searchable
 - Drag to reorder pages in the filmstrip
 - Batch split: several receipts in one photo
 - Share-target on mobile (receive photos from other apps)
+- Optional signature and redaction tools
 
 ## License
 

@@ -8,7 +8,10 @@ import { join, resolve } from "node:path";
 const dist = resolve(process.argv[2] ?? "dist");
 const html = await readFile(join(dist, "index.html"), "utf8");
 
-const refs = [...html.matchAll(/(?:src|href)="([^"]+)"/g)].map((m) => m[1]);
+// src/href plus meta content (og:image and friends are content="")
+const refs = [...html.matchAll(/(?:src|href|content)="([^"]+)"/g)]
+  .map((m) => m[1])
+  .filter((v) => v.startsWith("./") || v.startsWith("/") || /^[\w-]+\.(?:png|svg|jpe?g|webp)$/.test(v));
 const local = refs.filter(
   (u) => !/^(?:[a-z]+:|\/\/|#|data:)/i.test(u)
 );
