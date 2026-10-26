@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Self-healing: if Pages was ever not set up (a fresh clone, a renamed repo,
+  # a deleted environment), this re-runs the whole chain without anyone
+  # pushing anything.
+  schedule:
+    - cron: "17 4 * * *"
   workflow_dispatch:
 
 concurrency:
@@ -61,7 +66,12 @@ jobs:
           name: scano-site
           path: dist
 
+      # `enablement: true` creates the Pages site through the API when it does
+      # not exist yet — the workflow is therefore never blocked on one manual
+      # click after a fork, a rename or a reset.
       - uses: actions/configure-pages@v5
+        with:
+          enablement: true
 
       - uses: actions/upload-pages-artifact@v3
         with:
@@ -73,6 +83,18 @@ jobs:
       # A deploy that "succeeded" but published nothing looks exactly like a
       # white page: index.html arrives, its bundle 404s. Check the live URL for
       # files that only exist in dist/, instead of trusting the green tick.
+      - name: Confirm Pages is enabled
+        run: |
+          repo="${{ github.repository }}"
+          if gh api "repos/${repo}/pages" --jq .html_url > /tmp/pages-url; then
+            echo "Pages is enabled at $(cat /tmp/pages-url)"
+          else
+            echo "::error::Pages could not be enabled for ${repo}. Set Settings > Pages > Source to \"GitHub Actions\" once, then re-run this workflow."
+            exit 1
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Verify the live site is the built app
         run: |
           url="${{ steps.deploy.outputs.page_url }}"
