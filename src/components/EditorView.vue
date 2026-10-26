@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import CornerEditor from "./CornerEditor.vue";
 import Icon from "./Icon.vue";
 import type { Quad } from "../lib/cv";
+import { click, tap } from "../lib/haptics";
 import { canvasFor, containFit } from "../lib/image";
 import { activePage, autoDetect, CROP_MAX, PREVIEW_MAX, processPage, scan } from "../lib/store";
 
@@ -143,6 +144,7 @@ async function reprocess(options: { rewriteWarp?: boolean; maxSide?: number; ful
 async function setOptimize(next: boolean) {
   const current = page.value;
   if (!current || current.opts.optimize === next) return;
+  click();
   current.opts.optimize = next;
   await reprocess({});
 }
@@ -152,6 +154,7 @@ async function toggleOptimize() {
 }
 
 function toggleFrame() {
+  tap();
   mode.value = mode.value === "result" ? "frame" : "result";
   if (mode.value === "frame") {
     // the corner tool works on the photo; nothing to render yet
@@ -295,10 +298,10 @@ defineExpose({ openFrame: () => (mode.value = "frame") });
         @commit="onCommit"
       />
 
-      <p v-if="mode === 'frame'" class="frame-hint">
+      <p v-if="mode === 'frame'" class="frame-hint" role="status">
         {{ notice ?? "Drag a corner to adjust" }}
       </p>
-      <p v-else-if="notice" class="frame-hint">{{ notice }}</p>
+      <p v-else-if="notice" class="frame-hint" role="status">{{ notice }}</p>
 
       <button v-if="mode === 'frame'" class="auto-pill" @click="runAuto">
         <Icon name="auto" :size="18" />
@@ -330,7 +333,7 @@ defineExpose({ openFrame: () => (mode.value = "frame") });
         <span class="optimize-switch" aria-hidden="true"><span /></span>
       </button>
 
-      <button class="done" aria-label="Done with this page" @click="emit('done')">
+      <button class="done" aria-label="Done with this page" @click="tap(); emit('done')">
         <Icon name="check" :size="20" :stroke="2.4" />
         <span>Done</span>
       </button>

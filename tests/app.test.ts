@@ -43,6 +43,7 @@ async function choose(wrapper: VueWrapper, label: string) {
 
 beforeEach(() => {
   clearPages();
+  window.localStorage.clear();
   denyCamera();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -64,6 +65,20 @@ describe("camera", () => {
     expect(wrapper.text()).toContain("Photos");
     expect(wrapper.text()).toContain("Flip");
     wrapper.unmount();
+  });
+
+  it("remembers the Detect switch between visits", async () => {
+    allowCamera();
+    const first = mount(App);
+    await tick(30);
+    await first.find('button[aria-label="Detect the page while framing"]').trigger("click");
+    await tick(10);
+    first.unmount();
+
+    const second = mount(App);
+    await tick(30);
+    expect(second.find('button[aria-label="Detect the page while framing"]').classes()).toContain("on");
+    second.unmount();
   });
 
   it("has detection off by default and lets the user switch it on", async () => {
@@ -307,6 +322,29 @@ describe("pages", () => {
 
     expect(scan.pages.length).toBe(0);
     expect(wrapper.findAll(".page-card").length).toBe(0);
+
+    // deleting is one fat finger away from disaster, and there is no re-shoot
+    expect(wrapper.find(".undo-bar").exists()).toBe(true);
+    await wrapper.find(".undo-action").trigger("click");
+    await tick(50);
+    expect(scan.pages.length).toBe(1);
+    expect(wrapper.findAll(".page-card").length).toBe(1);
+    expect(wrapper.find(".undo-bar").exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("explains the empty grid instead of leaving a lonely plus", async () => {
+    stubDemoFetch();
+    const wrapper = mount(App);
+    await tick(20);
+    await shootDemo(wrapper);
+    await choose(wrapper, "Crop it by hand");
+    await wrapper.find("button.done").trigger("click");
+    await tick(100);
+
+    await wrapper.find(".page-del").trigger("click");
+    await tick(50);
+    expect(wrapper.find(".pages-empty").text()).toContain("No pages yet");
     wrapper.unmount();
   });
 });

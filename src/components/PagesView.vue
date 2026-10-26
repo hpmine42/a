@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import Icon from "./Icon.vue";
+import { tap } from "../lib/haptics";
 import { exportPdf, pdfFilename, type PageFormat } from "../lib/pdf";
-import { clearPages, removePage, scan } from "../lib/store";
+import { clearPages, insertPage, insertPages, removePage, scan, type Page } from "../lib/store";
 
 const emit = defineEmits<{ (e: "back"): void; (e: "edit", id: number): void; (e: "add"): void }>();
 
@@ -12,6 +13,51 @@ const error = ref<string | null>(null);
 const nameField = ref<HTMLInputElement | null>(null);
 
 const isBusy = computed(() => busy.value);
+const progressPct = computed(() =>
+  progress.value.total ? Math.round((progress.value.done / progress.value.total) * 100) : 0
+);
+
+/* ------------------------------------------------------------------- undo */
+
+/**
+ * Removing a page is one fat-finger away from destroying a scan, and there is no
+ * re-shoot. Instead of a confirm dialog (which everyone dismisses) the action
+ * is reversible for a few seconds.
+ */
+const undo = ref<{ label: string; run: () => void } | null>(null);
+let undoTimer = 0;
+
+function offerUndo(label: string, run: () => void) {
+  undo.value = { label, run };
+  window.clearTimeout(undoTimer);
+  undoTimer = window.setTimeout(() => (undo.value = null), 6000);
+}
+
+function takeUndo() {
+  const pendingUndo = undo.value;
+  undo.value = null;
+  window.clearTimeout(undoTimer);
+  if (!pendingUndo) return;
+  tap();
+  pendingUndo.run();
+}
+
+function dropPage(id: number) {
+  const index = scan.pages.findIndex((p) => p.id === id);
+  if (index === -1) return;
+  const page = scan.pages[index];
+  tap();
+  removePage(id);
+  offerUndo("Page removed", () => insertPage(page as Page, index));
+}
+
+function dropAll() {
+  if (!scan.pages.length) return;
+  const saved = scan.pages.slice();
+  tap();
+  clearPages();
+  offerUndo(saved.length === 1 ? "Page removed" : `${saved.length} pages removed`, () => insertPages(saved));
+}
 
 const formats: { id: PageFormat; label: string; hint: string }[] = [
   { id: "a4", label: "A4", hint: "Print on A4, 4% margin" },
@@ -30,6 +76,8 @@ function suggestedName(): string {
 onMounted(() => {
   if (!scan.filename) scan.filename = suggestedName();
 });
+
+onBeforeUnmount(() => window.clearTimeout(undoTimer));
 
 const finalName = computed(() => pdfFilename(scan.filename, scan.pages.length));
 
@@ -56,19 +104,24 @@ async function savePdf() {
         <span>Camera</span>
       </button>
       <span class="pages-count">{{ label }}</span>
-      <button class="control danger" aria-label="Delete all pages" @click="clearPages()">
+      <button class="control danger" aria-label="Delete all pages" :disabled="isBusy" @click="dropAll">
         <Icon name="trash" :size="18" />
         <span>Clear</span>
       </button>
     </header>
 
     <div class="pages-grid">
+      <p v-if="!scan.pages.length" class="pages-empty">
+        <strong>No pages yet</strong>
+        <span>Take a photo of a document. Nothing leaves this device.</span>
+      </p>
+
       <figure v-for="(page, i) in scan.pages" :key="page.id" class="page-card">
         <button class="page-thumb" :aria-label="`Edit page ${i + 1}`" @click="emit('edit', page.id)">
           <img v-if="page.thumb" :src="page.thumb" alt="" />
           <span class="page-num">{{ i + 1 }}</span>
         </button>
-        <button class="page-del" :aria-label="`Remove page ${i + 1}`" @click="removePage(page.id)">
+        <button class="page-del" :aria-label="`Remove page ${i + 1}`" @click="dropPage(page.id)">
           <Icon name="close" :size="15" :stroke="2.2" />
         </button>
       </figure>
@@ -76,6 +129,11 @@ async function savePdf() {
       <button class="page-add" aria-label="Add pages" @click="emit('add')">
         <Icon name="plus" :size="24" />
       </button>
+    </div>
+
+    <div v-if="undo" class="undo-bar" role="status" aria-live="polite">
+      <span>{{ undo.label }}</span>
+      <button class="undo-action" @click="takeUndo">Undo</button>
     </div>
 
     <footer class="pages-dock">
@@ -117,6 +175,12 @@ async function savePdf() {
       </div>
       <p v-if="error" class="pages-error">{{ error }}</p>
       <button class="save" :disabled="isBusy || !scan.pages.length" @click="savePdf">
+        <span
+          v-if="isBusy"
+          class="save-bar"
+          aria-hidden="true"
+          :style="{ width: `${Math.max(6, progressPct)}%` }"
+        />
         <Icon name="pdf" :size="19" />
         <span>{{ isBusy ? `Building ${progress.done}/${progress.total}…` : "Save PDF" }}</span>
       </button>

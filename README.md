@@ -50,10 +50,13 @@ camera frame — desk, shadow, skew. After is what the export produces.
   sheet, that crop is used without asking. If it is not, Scano asks: crop by
   hand, detect this photo, or keep the whole frame.
 - **Manual framing that actually lands.** Drag any corner with a magnifier loupe
-  (it shows exactly the pixel under your finger), or drag the whole sheet. Every
-  release re-renders the page. The crop button switches back and forth.
-- **Three looks, one row** — B&W, soft grey or the original colour, chosen from a
-  single segmented control where the active one is lit amber.
+  (it shows exactly the pixel under your finger), or drag the whole sheet. The
+  page is re-rendered once, when you leave the crop tool, so dragging stays
+  butter-smooth instead of warping a photo on every finger lift.
+- **One switch, no look-hunting.** *Optimize* flattens the lighting, whitens the
+  paper and sharpens the text; off gives you the straight photo exactly as it
+  was taken. It is the only image control in the app, and it costs one pass
+  over the preview rather than a re-import.
 - **Multi-page PDF** at up to 3000px per page — A4, US Letter, or a page that
   matches the scan exactly — with the file name typed in the app before saving.
 - **Pinch to zoom in the viewfinder**, with 0.5× / 1× / 2× chips and a switch to
@@ -93,9 +96,11 @@ light is never even. So `enhance()` works in this order:
    back up — soft edges, so small type stays readable instead of turning into
    speckle.
 
-Imports are read at up to 3600px, previews render at 2400px, exports at 3000px.
-Both the crop and the export pull the quad in by 0.5%, because detection and
-hand-placed corners both tend to sit a pixel outside the paper — that sliver of
+Imports are read at up to 3600px and exports at 3000px. The editor renders at
+the size of the glass instead of a fixed 2400px — a page shown 390px wide gains
+nothing from a 6× oversampled buffer, and the difference is what makes toggling
+*Optimize* feel instant. The crop is pulled in by 0.8%, because detection and
+hand-placed corners both tend to sit a little outside the paper — that sliver of
 desk is the dark line along the edge of an otherwise clean scan.
 
 ## How the detection works

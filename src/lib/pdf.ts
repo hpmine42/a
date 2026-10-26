@@ -92,8 +92,10 @@ export async function exportPdf(
     const result = page.opts.optimize
       ? enhance(warped, { mode: "bw", brightness: 0, contrast: 0, strength: 58 })
       : warped;
-    // 0.95 with no chroma detail to speak of: honest text, small file
-    const dataUrl = imageDataToCanvas(result).toDataURL("image/jpeg", 0.95);
+    // An optimised page is black text on paper: it survives 0.9 untouched and
+    // saves a third of the file. A photo keeps 0.95 — that is where it shows.
+    const quality = page.opts.optimize ? 0.9 : 0.95;
+    const dataUrl = imageDataToCanvas(result).toDataURL("image/jpeg", quality);
 
     const paper =
       format === "fit"

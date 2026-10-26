@@ -11,6 +11,7 @@ import {
   shouldOfferInstall,
   watchInstallPrompt,
 } from "../lib/install";
+import { tap, thump } from "../lib/haptics";
 import { IMPORT_MAX } from "../lib/store";
 
 const props = defineProps<{ thumbs: string[]; pageCount: number }>();
@@ -27,6 +28,19 @@ const error = ref<"denied" | "missing" | null>(null);
 const ready = ref(false);
 /** Detection is opt-in: it costs battery and can be distracting. */
 const autoOn = ref(false);
+/** A photo is being decoded from the library — the viewfinder says so. */
+const loading = ref(false);
+
+/** Remember the Detect switch: a preference, not a per-photo decision. */
+const DETECT_KEY = "scano.detect";
+
+function rememberedDetect(): boolean {
+  try {
+    return window.localStorage.getItem(DETECT_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
 const torchOn = ref(false);
 const torchAvailable = ref(false);
 const facing = ref<"environment" | "user">("environment");
@@ -420,6 +434,7 @@ function loop(now: number) {
 async function capture() {
   const v = video.value;
   if (!v || !v.videoWidth) return;
+  thump();
   flash.value = true;
   window.setTimeout(() => (flash.value = false), 220);
   try {
@@ -446,6 +461,8 @@ async function capture() {
 }
 
 async function useDemo() {
+  tap();
+  loading.value = true;
   try {
     const res = await fetch(`${import.meta.env.BASE_URL}samples/letter.jpg`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -456,6 +473,8 @@ async function useDemo() {
     emit("captured", { img, quad: null, auto: false });
   } catch (err) {
     console.error("[scanner] demo photo unavailable", err);
+  } finally {
+    loading.value = false;
   }
 }
 
@@ -463,8 +482,17 @@ async function onFiles(event: Event) {
   const input = event.target as HTMLInputElement;
   const files = Array.from(input.files ?? []).filter((f) => f.type.startsWith("image/"));
   input.value = "";
-  for (const file of files) {
-    emit("captured", { img: await imageDataFromFile(file, IMPORT_MAX), quad: null, auto: false });
+  if (!files.length) return;
+  tap();
+  loading.value = true;
+  try {
+    for (const file of files) {
+      emit("captured", { img: await imageDataFromFile(file, IMPORT_MAX), quad: null, auto: false });
+    }
+  } catch (err) {
+    console.error("[scanner] could not read the photo", err);
+  } finally {
+    loading.value = false;
   }
 }
 
@@ -474,6 +502,7 @@ let observer: ResizeObserver | null = null;
 
 onMounted(async () => {
   ensureWorker();
+  autoOn.value = rememberedDetect();
   unwatchInstall = watchInstallPrompt({
     onAvailable: () => (promptReady.value = true),
     onInstalled: () => {
@@ -502,6 +531,11 @@ onBeforeUnmount(() => {
 });
 
 watch(autoOn, (on) => {
+  try {
+    window.localStorage.setItem(DETECT_KEY, on ? "1" : "0");
+  } catch {
+    /* private mode: the switch simply forgets */
+  }
   if (!on) {
     target.value = null;
     eased.value = null;
@@ -581,6 +615,13 @@ watch(autoOn, (on) => {
         <span class="zoom-value" aria-live="polite">{{ zoomLabel }}</span>
       </div>
 
+      <Transition name="fade">
+        <div v-if="loading" class="camera-busy" role="status" aria-live="polite">
+          <span class="spinner" />
+          <span>Opening photo…</span>
+        </div>
+      </Transition>
+
       <div v-if="!ready" class="camera-fallback">
         <template v-if="error">
           <div class="fallback-icon"><Icon name="camera" :size="28" /></div>
@@ -609,7 +650,7 @@ watch(autoOn, (on) => {
         <span class="shutter-ring" />
       </button>
 
-      <button class="dock-action" @click="flipCamera" aria-label="Switch camera">
+      <button class="dock-action" @click="tap(); flipCamera()" aria-label="Switch camera">
         <span class="round"><Icon name="flip" :size="22" /></span>
         <span class="dock-label">Flip</span>
       </button>

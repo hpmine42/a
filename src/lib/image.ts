@@ -60,7 +60,9 @@ export function makeThumb(img: ImageData, w = 240, h = 320): string {
   c.height = th;
   const ctx = c.getContext("2d")!;
   ctx.imageSmoothingQuality = "high";
-  ctx.drawImage(imageDataToCanvas(img), 0, 0, tw, th);
+  // the cached canvas is also what the editor draws, so a thumbnail costs a
+  // draw, not another page-sized allocation
+  ctx.drawImage(canvasFor(img), 0, 0, tw, th);
   return c.toDataURL("image/jpeg", 0.72);
 }
 

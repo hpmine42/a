@@ -453,6 +453,28 @@ img {
   background: rgba(255, 255, 255, 0.06);
 }
 
+/* A small, honest "working" chip: decoding a photo from the library can take a
+   moment on a phone, and silence looks like a broken button. */
+.camera-busy {
+  position: absolute;
+  z-index: 4;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: inline-flex;
+  align-items: center;
+  gap: calc(10px * var(--u));
+  padding: calc(12px * var(--u)) calc(20px * var(--u));
+  border-radius: 999px;
+  font-size: calc(14px * var(--u));
+  font-weight: 600;
+  color: var(--text);
+  background: rgba(10, 12, 15, 0.82);
+  border: 1px solid var(--line-strong);
+  backdrop-filter: blur(12px);
+  pointer-events: none;
+}
+
 /* dock ------------------------------------------------------------------- */
 
 .camera-dock {
@@ -868,6 +890,20 @@ img {
   opacity: 0.72;
 }
 
+.choice:disabled {
+  cursor: progress;
+}
+
+.choice:disabled:not(.primary) {
+  opacity: 0.5;
+}
+
+.choice-icon .spinner {
+  width: calc(20px * var(--u));
+  height: calc(20px * var(--u));
+  border-width: 2px;
+}
+
 /* ==========================================================================
    editor
    ========================================================================== */
@@ -1178,6 +1214,68 @@ img {
   scrollbar-width: thin;
 }
 
+.pages-empty {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: calc(4px * var(--u));
+  margin: 0 0 calc(4px * var(--u));
+  padding: calc(22px * var(--u)) calc(20px * var(--u));
+  border-radius: calc(16px * var(--u));
+  text-align: center;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--line);
+}
+
+.pages-empty strong {
+  font-size: calc(15px * var(--u));
+  font-weight: 650;
+  color: var(--text);
+}
+
+.pages-empty span {
+  font-size: var(--fs-small);
+}
+
+/* Reversible actions: a small bar that sits above the dock, so the undo is in
+   the same place the disappearing page was. */
+.undo-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(12px * var(--u));
+  margin: 0 calc(16px * var(--u)) calc(8px * var(--u));
+  padding: calc(9px * var(--u)) calc(10px * var(--u)) calc(9px * var(--u))
+    calc(16px * var(--u));
+  border-radius: 999px;
+  font-size: calc(14px * var(--u));
+  color: var(--text);
+  background: rgba(26, 30, 36, 0.92);
+  border: 1px solid var(--line-strong);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.45);
+  animation: undo-in 0.18s var(--ease);
+}
+
+@keyframes undo-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+.undo-action {
+  padding: calc(7px * var(--u)) calc(16px * var(--u));
+  border-radius: 999px;
+  font-size: calc(13.5px * var(--u));
+  font-weight: 700;
+  color: #1a1305;
+  background: var(--amber);
+}
+
+.undo-action:active {
+  transform: scale(0.96);
+}
+
 .page-card {
   position: relative;
   margin: 0;
@@ -1390,6 +1488,8 @@ img {
 }
 
 .save {
+  position: relative;
+  overflow: hidden;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1404,6 +1504,21 @@ img {
   background: linear-gradient(160deg, #ffd79a, var(--amber));
   box-shadow: 0 12px 30px rgba(255, 192, 97, 0.18);
   transition: transform 0.12s var(--ease), box-shadow 0.18s var(--ease), opacity 0.15s;
+}
+
+/* The build progress fills the button from the left: the same tap target keeps
+   reporting, so nobody has to hunt for a progress bar. */
+.save-bar {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: rgba(255, 255, 255, 0.42);
+  transition: width 0.25s var(--ease);
+  pointer-events: none;
+}
+
+.save > svg,
+.save > span:not(.save-bar) {
+  position: relative;
 }
 
 .save:hover:not(:disabled) {

@@ -160,6 +160,19 @@ export function toggleOptimize(page: Page): void {
   page.opts.optimize = !page.opts.optimize;
 }
 
+/** Put a page back where it came from — the other half of a removal. */
+export function insertPage(page: Page, index: number): void {
+  const at = Math.max(0, Math.min(index, scan.pages.length));
+  scan.pages.splice(at, 0, page);
+  scan.activeId = page.id;
+}
+
+/** Restore a list of pages (undo of "clear all"). */
+export function insertPages(pages: Page[]): void {
+  scan.pages.unshift(...pages);
+  scan.activeId = scan.pages[0]?.id ?? 0;
+}
+
 export function removePage(id: number): void {
   const index = scan.pages.findIndex((p) => p.id === id);
   if (index === -1) return;

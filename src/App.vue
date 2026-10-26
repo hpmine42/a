@@ -5,6 +5,7 @@ import CaptureReview from "./components/CaptureReview.vue";
 import EditorView from "./components/EditorView.vue";
 import PagesView from "./components/PagesView.vue";
 import { detectPageQuad, fullFrameQuad, type Quad } from "./lib/cv";
+import { tap, thump } from "./lib/haptics";
 import { makeThumb, nextFrame } from "./lib/image";
 import { addPage, processPage, scan } from "./lib/store";
 
@@ -17,6 +18,8 @@ const scanThumb = ref("");
 const pending = ref<ImageData | null>(null);
 /** Did the viewfinder have detection switched on when the photo was taken? */
 const pendingAuto = ref(false);
+/** The review sheet is working (a full detection pass), so it must stay put. */
+const reviewBusy = ref(false);
 const editorMode = ref<"result" | "frame">("result");
 const editorNotice = ref<string | null>(null);
 
@@ -56,6 +59,7 @@ function pump() {
 async function applyDetected(img: ImageData, quad: Quad) {
   scanThumb.value = makeThumb(img, 300, 400);
   scanning.value = true;
+  thump();
   await nextFrame();
   try {
     const page = addPage(img, "scan");
@@ -70,11 +74,17 @@ async function applyDetected(img: ImageData, quad: Quad) {
   }
 }
 
-/** Let the detector have a go on the captured photo. */
+/**
+ * Let the detector have a go on the captured photo.
+ *
+ * The photo stays on the review sheet for as long as the work takes: clearing
+ * `pending` first would unmount the sheet and flash the page grid for half a
+ * second, which reads like a bug.
+ */
 async function chooseAuto() {
   const img = pending.value;
-  if (!img) return;
-  pending.value = null;
+  if (!img || reviewBusy.value) return;
+  reviewBusy.value = true;
   busy = true;
   try {
     const quad = detectPageQuad(img, { effort: "thorough" });
@@ -85,10 +95,12 @@ async function chooseAuto() {
       page.quad = fullFrameQuad(img.width, img.height);
       page.warped = null;
       editorMode.value = "frame";
-      editorNotice.value = "No page edge found — crop it by hand";
+      editorNotice.value = "No page edge found — drag the corners";
       view.value = "edit";
     }
   } finally {
+    pending.value = null;
+    reviewBusy.value = false;
     busy = false;
     pump();
   }
@@ -99,6 +111,7 @@ function chooseManual() {
   const img = pending.value;
   if (!img) return;
   pending.value = null;
+  tap();
   const page = addPage(img, "scan");
   // a detection guess is a decent starting point, but it never blocks the user
   const guess = detectPageQuad(img, { effort: "fast" });
@@ -114,6 +127,7 @@ function chooseWhole() {
   const img = pending.value;
   if (!img) return;
   pending.value = null;
+  tap();
   const page = addPage(img, "scan");
   page.quad = fullFrameQuad(img.width, img.height);
   page.warped = null;
@@ -167,6 +181,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
         :src="pending"
         :page-count="scan.pages.length"
         :detection-on="pendingAuto"
+        :busy="reviewBusy"
         @auto="chooseAuto"
         @manual="chooseManual"
         @whole="chooseWhole"
