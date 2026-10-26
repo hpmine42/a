@@ -3,6 +3,7 @@ import {
   detectPageQuad,
   enhance,
   fullFrameQuad,
+  insetQuad,
   outputSize,
   warp,
   type EnhanceOpts,
@@ -24,16 +25,25 @@ export type Page = {
   opts: Opts;
 };
 
-/** Long side used for the on-screen preview. Kept below 2k for snappy sliders. */
-export const PREVIEW_MAX = 1800;
-/** Long side used for the exported PDF. */
-export const EXPORT_MAX = 2600;
+/**
+ * Resolution budgets.
+ *
+ * `IMPORT_MAX` is what a picked photo or a captured frame is read at — phone
+ * cameras produce 4000px wide images, and throwing that away at import is what
+ * made crops look soft. `PREVIEW_MAX` is the on-screen render (sharp on a 3x
+ * phone screen without spending 30MB per page). `EXPORT_MAX` is the PDF.
+ */
+export const IMPORT_MAX = 3600;
+export const PREVIEW_MAX = 2400;
+export const EXPORT_MAX = 3000;
 
 export const scan = reactive({
   pages: [] as Page[],
   activeId: 0,
   /** Paper size for the exported PDF. */
   format: "a4" as "a4" | "letter" | "fit",
+  /** What the exported file is called, without the extension. */
+  filename: "",
 });
 
 let nextId = 1;
@@ -77,7 +87,7 @@ function safeDetect(img: ImageData): Quad | null {
   try {
     return detectPageQuad(img, { effort: "thorough" });
   } catch (err) {
-    console.warn("[flatbed] detection failed", err);
+    console.warn("[scanner] detection failed", err);
     return null;
   }
 }
@@ -93,8 +103,11 @@ export async function processPage(
   await nextFrame();
   const maxSide = full ? PREVIEW_MAX : 900;
   if (!page.warped || rewriteWarp) {
-    const size = outputSize(page.quad, maxSide);
-    page.warped = markRaw(warp(page.src, page.quad, size.w, size.h));
+    // the crop is pulled in a hair: both detection and hand-placed corners tend
+    // to sit just outside the paper, and that shows up as a dark desk edge
+    const quad = insetQuad(page.quad, 0.005);
+    const size = outputSize(quad, maxSide);
+    page.warped = markRaw(warp(page.src, quad, size.w, size.h));
   }
   page.result = markRaw(enhance(page.warped, page.opts));
   if (full) page.thumb = makeThumb(page.result);

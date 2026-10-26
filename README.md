@@ -42,10 +42,13 @@ Both images come from the demo photo that ships with the app.
 - **Manual framing that actually lands.** Drag any corner with a magnifier loupe
   (it shows exactly the pixel under your finger), or drag the whole sheet. Every
   release re-renders the page. The crop button switches back and forth.
-- **Three looks** — clean B&W (adaptive threshold, shadow-proof), grayscale,
-  colour — as one-tap swatches.
-- **Multi-page PDF** at up to 2600px per page — A4, US Letter, or a page that
-  matches the scan exactly.
+- **Three looks, shown as real previews** — B&W, soft grey and original colour,
+  each rendered from *your* page, not an abstract swatch.
+- **Multi-page PDF** at up to 3000px per page — A4, US Letter, or a page that
+  matches the scan exactly — with the file name typed in the app before saving.
+- **Pinch to zoom in the viewfinder**, with 0.5× / 1× / 2× chips and a switch to
+  the ultra-wide lens when the phone exposes one. Everywhere else the app holds
+  pinch-to-zoom shut, because it only ever fights the user.
 - **Installable** — a real PWA with an offline shell. Add it to the home screen
   and it keeps working with no network at all.
 
@@ -65,6 +68,25 @@ Some phones browse in "desktop site" mode, which reports a ~980px viewport on a
 ~410px screen and makes the browser paint everything at about 40%. `src/lib/fit.ts`
 measures that mismatch and sets `--u`, so the UI comes out the right size anyway.
 `?u=2.4` forces a scale by hand if a browser is being creative.
+
+## How the pictures get good
+
+A phone photo of a page is paper multiplied by the light falling on it, and that
+light is never even. So `enhance()` works in this order:
+
+1. **Flatten the illumination** — estimate the light as a heavy blur of the
+   luma, then divide it out. Shadows stop being something the threshold has to
+   fight, which is what used to leave grey blotches and grey paper.
+2. **Stretch the levels** on 2%–98.5% percentiles, ignoring the tails.
+3. **Sharpen** with an unsharp mask sized for grain, not for edges.
+4. **Threshold** (B&W) with a Sauvola map computed on a small copy and sampled
+   back up — soft edges, so small type stays readable instead of turning into
+   speckle.
+
+Imports are read at up to 3600px, previews render at 2400px, exports at 3000px.
+Both the crop and the export pull the quad in by 0.5%, because detection and
+hand-placed corners both tend to sit a pixel outside the paper — that sliver of
+desk is the dark line along the edge of an otherwise clean scan.
 
 ## How the detection works
 

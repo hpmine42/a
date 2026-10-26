@@ -109,8 +109,10 @@ describe("capture with a known page", () => {
     expect(wrapper.find(".editor").exists()).toBe(true);
     expect(scan.pages.length).toBe(1);
     // detection runs on a 320px frame of a 1280px video, so the stored quad is
-    // scaled back up by 4 before it is used for the crop
-    expect(scan.pages[0].quad[0].x).toBeCloseTo(80, 0);
+    // scaled back up by 4 (20 → 80) and then pulled in a hair, so no desk edge
+    // ends up on the finished page
+    expect(scan.pages[0].quad[0].x).toBeGreaterThan(80);
+    expect(scan.pages[0].quad[0].x).toBeLessThan(92);
     wrapper.unmount();
   });
 
@@ -136,10 +138,12 @@ describe("capture without a page", () => {
 
     expect(wrapper.find(".review").exists()).toBe(true);
     expect(wrapper.findAll("button.choice").length).toBe(3);
-    expect(wrapper.text()).toContain("No page detected");
-    expect(wrapper.text()).toContain("Crop by hand");
-    expect(wrapper.text()).toContain("Detect the page");
-    expect(wrapper.text()).toContain("Use the whole photo");
+    // detection was off, so nothing failed — the copy must not claim otherwise
+    expect(wrapper.text()).not.toContain("No page detected");
+    expect(wrapper.text()).toContain("How should we crop this?");
+    expect(wrapper.text()).toContain("Crop it by hand");
+    expect(wrapper.text()).toContain("Find the page automatically");
+    expect(wrapper.text()).toContain("Keep the whole photo");
     expect(scan.pages.length).toBe(0);
     expect(wrapper.find(".editor").exists()).toBe(false);
     wrapper.unmount();
@@ -150,7 +154,7 @@ describe("capture without a page", () => {
     const wrapper = mount(App);
     await tick(20);
     await shootDemo(wrapper);
-    await choose(wrapper, "Crop by hand");
+    await choose(wrapper, "Crop it by hand");
 
     expect(wrapper.find(".editor").exists()).toBe(true);
     expect(wrapper.find(".corner-editor").exists()).toBe(true);
@@ -163,7 +167,7 @@ describe("capture without a page", () => {
     const wrapper = mount(App);
     await tick(20);
     await shootDemo(wrapper);
-    await choose(wrapper, "Detect the page");
+    await choose(wrapper, "Find the page automatically");
 
     expect(wrapper.find(".corner-editor").exists()).toBe(true);
     expect(wrapper.find(".frame-hint").text()).toContain("No page edge found");
@@ -175,7 +179,7 @@ describe("capture without a page", () => {
     const wrapper = mount(App);
     await tick(20);
     await shootDemo(wrapper);
-    await choose(wrapper, "Use the whole photo");
+    await choose(wrapper, "Keep the whole photo");
 
     expect(scan.pages.length).toBe(1);
     expect(wrapper.find(".corner-editor").exists()).toBe(true);
@@ -203,11 +207,11 @@ describe("editor", () => {
     const wrapper = mount(App);
     await tick(20);
     await shootDemo(wrapper);
-    await choose(wrapper, "Crop by hand");
+    await choose(wrapper, "Crop it by hand");
 
     const looks = wrapper.findAll("button.look");
     expect(looks.length).toBe(3);
-    expect(looks.map((l) => l.text())).toEqual(["B/W", "Gray", "Colour"]);
+    expect(looks.map((l) => l.text())).toEqual(["B/W", "Grey", "Colour"]);
 
     const gray = wrapper.find("button.look.gray");
     await gray.trigger("click");
@@ -223,7 +227,7 @@ describe("editor", () => {
     const wrapper = mount(App);
     await tick(20);
     await shootDemo(wrapper);
-    await choose(wrapper, "Crop by hand");
+    await choose(wrapper, "Crop it by hand");
 
     const editor = wrapper.findComponent({ name: "CornerEditor" });
     const next = scan.pages[0].quad.map((p) => ({ x: p.x * 0.5, y: p.y * 0.5 }));
@@ -242,7 +246,7 @@ describe("pages", () => {
     const wrapper = mount(App);
     await tick(20);
     await shootDemo(wrapper);
-    await choose(wrapper, "Crop by hand");
+    await choose(wrapper, "Crop it by hand");
     await wrapper.find("button.done").trigger("click");
     await tick(100);
 
@@ -264,7 +268,7 @@ describe("pages", () => {
     const wrapper = mount(App);
     await tick(20);
     await shootDemo(wrapper);
-    await choose(wrapper, "Crop by hand");
+    await choose(wrapper, "Crop it by hand");
     await wrapper.find("button.done").trigger("click");
     await tick(100);
 
@@ -273,6 +277,67 @@ describe("pages", () => {
 
     expect(scan.pages.length).toBe(0);
     expect(wrapper.findAll(".page-card").length).toBe(0);
+    wrapper.unmount();
+  });
+});
+
+describe("camera zoom", () => {
+  it("offers zoom chips and reports the current zoom", async () => {
+    allowCamera();
+    const wrapper = mount(App);
+    await tick(40);
+
+    const chips = wrapper.findAll("button.zoom-chip");
+    expect(chips.map((c) => c.text())).toContain("1×");
+    expect(chips.map((c) => c.text())).toContain("2×");
+    expect(wrapper.find(".zoom-value").text()).toBe("1.0×");
+    // pressing a chip is how the lens moves without the pinch gesture
+    await wrapper.findAll("button.zoom-chip")[2].trigger("click");
+    await tick(50);
+    expect(wrapper.find(".zoom-value").text()).toBe("2.0×");
+    wrapper.unmount();
+  });
+
+  it("never lets the page zoom escape from the viewfinder", async () => {
+    // the stage owns its gesture; the rest of the app locks it (lib/gestures)
+    const wrapper = mount(App);
+    await tick(20);
+    expect(wrapper.find(".camera-stage").exists()).toBe(true);
+    wrapper.unmount();
+  });
+});
+
+describe("pdf naming", () => {
+  it("lets the user name the file before saving", async () => {
+    stubDemoFetch();
+    const wrapper = mount(App);
+    await tick(20);
+    await shootDemo(wrapper);
+    await choose(wrapper, "Crop it by hand");
+    await wrapper.find("button.done").trigger("click");
+    await tick(100);
+
+    const field = wrapper.find("#pdf-name");
+    expect(field.exists()).toBe(true);
+    // a sensible default is filled in already
+    expect((field.element as HTMLInputElement).value).toMatch(/^scan \d{4}-\d{2}-\d{2}$/);
+    expect(wrapper.text()).toContain(".pdf");
+
+    await field.setValue("Rechnung August");
+    expect(scan.filename).toBe("Rechnung August");
+    expect(wrapper.find(".name-hint").text()).toContain("Rechnung August.pdf");
+    wrapper.unmount();
+  });
+});
+
+describe("ultra wide", () => {
+  it("offers the 0.5x chip when a second rear lens is there", async () => {
+    allowCamera();
+    const wrapper = mount(App);
+    await tick(60);
+
+    const chips = wrapper.findAll("button.zoom-chip").map((c) => c.text());
+    expect(chips).toContain("0.5×");
     wrapper.unmount();
   });
 });

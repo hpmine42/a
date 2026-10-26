@@ -35,6 +35,21 @@ export async function imageDataFromFile(file: File, maxSide = 2600): Promise<Ima
   }
 }
 
+/** Centre crop by a zoom factor — mirrors what a CSS-scaled preview shows. */
+export function cropRegion(img: ImageData, factor: number): ImageData {
+  const f = Math.max(1, factor);
+  const w = Math.max(1, Math.round(img.width / f));
+  const h = Math.max(1, Math.round(img.height / f));
+  const x = Math.round((img.width - w) / 2);
+  const y = Math.round((img.height - h) / 2);
+  const out = new ImageData(w, h);
+  for (let row = 0; row < h; row++) {
+    const from = ((y + row) * img.width + x) * 4;
+    out.data.set(img.data.subarray(from, from + w * 4), row * w * 4);
+  }
+  return out;
+}
+
 /** A thumbnail data URL for the filmstrip and the page grid. */
 export function makeThumb(img: ImageData, w = 240, h = 320): string {
   const scale = Math.min(w / img.width, h / img.height);
