@@ -52,8 +52,8 @@ camera frame — desk, shadow, skew. After is what the export produces.
 - **Manual framing that actually lands.** Drag any corner with a magnifier loupe
   (it shows exactly the pixel under your finger), or drag the whole sheet. Every
   release re-renders the page. The crop button switches back and forth.
-- **Three looks, shown as real previews** — B&W, soft grey and original colour,
-  each rendered from *your* page, not an abstract swatch.
+- **Three looks, one row** — B&W, soft grey or the original colour, chosen from a
+  single segmented control where the active one is lit amber.
 - **Multi-page PDF** at up to 3000px per page — A4, US Letter, or a page that
   matches the scan exactly — with the file name typed in the app before saving.
 - **Pinch to zoom in the viewfinder**, with 0.5× / 1× / 2× chips and a switch to

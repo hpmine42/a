@@ -214,6 +214,8 @@ describe("editor", () => {
     const looks = wrapper.findAll("button.look");
     expect(looks.length).toBe(3);
     expect(looks.map((l) => l.text())).toEqual(["B/W", "Grey", "Colour"]);
+    // a plain segmented control: text only, no thumbnail hunt
+    expect(wrapper.findAll("button.look img")).toHaveLength(0);
 
     const gray = wrapper.find("button.look.gray");
     await gray.trigger("click");

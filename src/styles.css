@@ -1006,79 +1006,57 @@ img {
     calc(16px * var(--u) + env(safe-area-inset-bottom, 0px));
 }
 
-/* Three little pages instead of three abstract dots: you pick a look by seeing
-   the actual scan in it. */
+/* One row, three words, the chosen one lit. No thumbnails: three tiny copies of
+   the same page read as a bug, not as a choice. */
 .looks {
   display: flex;
   flex: 1 1 auto;
   min-width: 0;
-  gap: calc(6px * var(--u));
-  padding: calc(6px * var(--u));
-  border-radius: calc(20px * var(--u));
-  background: rgba(255, 255, 255, 0.045);
+  gap: calc(4px * var(--u));
+  padding: calc(4px * var(--u));
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
   border: 1px solid var(--line);
 }
 
 .look {
-  display: grid;
   flex: 1 1 0;
   min-width: 0;
-  justify-items: center;
-  gap: calc(5px * var(--u));
-  padding: calc(5px * var(--u)) calc(4px * var(--u)) calc(4px * var(--u));
-  border-radius: calc(14px * var(--u));
-  transition: background 0.15s var(--ease), box-shadow 0.18s var(--ease);
-}
-
-.look-shot {
-  position: relative;
-  display: block;
-  width: 100%;
-  max-width: calc(46px * var(--u));
-  aspect-ratio: 3 / 4;
-  overflow: hidden;
-  border-radius: calc(6px * var(--u));
-  background: linear-gradient(160deg, #2a2f37, #14171c);
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.09);
-  transition: transform 0.16s var(--ease), box-shadow 0.18s var(--ease);
-}
-
-.look-shot img {
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.look-label {
-  font-size: var(--fs-label);
+  height: calc(46px * var(--u));
+  padding: 0 calc(10px * var(--u));
+  border-radius: 999px;
+  font-size: calc(13.5px * var(--u));
   font-weight: 650;
+  letter-spacing: -0.005em;
   color: var(--muted);
-  letter-spacing: 0.01em;
   white-space: nowrap;
+  transition: color 0.15s var(--ease), background 0.18s var(--ease),
+    box-shadow 0.18s var(--ease), transform 0.12s var(--ease);
 }
 
-.look:hover .look-shot {
-  transform: translateY(-1px);
+.look:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.05);
 }
 
-.look:active .look-shot {
-  transform: scale(0.96);
+.look:active {
+  transform: scale(0.97);
 }
 
 .look.active {
-  background: rgba(255, 192, 97, 0.12);
-  box-shadow: inset 0 0 0 1px rgba(255, 192, 97, 0.6);
-}
-
-.look.active .look-shot {
-  box-shadow:
-    0 0 0 calc(2px * var(--u)) var(--amber),
-    0 6px 16px rgba(255, 192, 97, 0.28);
+  color: #1a1305;
+  background: linear-gradient(160deg, #ffd79a, var(--amber));
+  box-shadow: 0 6px 16px rgba(255, 192, 97, 0.22);
 }
 
 .look.active .look-label {
-  color: var(--amber);
+  color: inherit;
+}
+
+.look-label {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .done {
@@ -1514,7 +1492,8 @@ html[data-fit="boost"] body {
 /* Very narrow phones: the dock has to stay on one line. */
 @media (max-width: 360px) {
   .look {
-    min-width: calc(50px * var(--u));
+    padding: 0 calc(6px * var(--u));
+    font-size: calc(12.5px * var(--u));
   }
 
   .done {
@@ -1543,7 +1522,7 @@ html[data-fit="boost"] body {
   }
 
   .look {
-    padding: 6px 5px 5px;
+    height: calc(42px * var(--u));
   }
 
   .shutter {
