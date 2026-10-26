@@ -1,54 +1,81 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import { onBeforeUnmount, onMounted, ref } from "vue";
 import CameraView from "./components/CameraView.vue";
+import CaptureReview from "./components/CaptureReview.vue";
 import EditorView from "./components/EditorView.vue";
 import PagesView from "./components/PagesView.vue";
 import { makeThumb } from "./lib/image";
 import { addPage, autoDetect, processPage, scan } from "./lib/store";
 
-type View = "camera" | "edit" | "pages";
+type View = "camera" | "review" | "edit" | "pages";
 
 const view = ref<View>("camera");
 const scanning = ref(false);
 const scanThumb = ref("");
-const editor = ref<InstanceType<typeof EditorView> | null>(null);
+const pending = ref<ImageData | null>(null);
+const editorMode = ref<"result" | "frame">("result");
+const editorNotice = ref<string | null>(null);
 
 const queue: ImageData[] = [];
-let ingesting = false;
+let pumping = false;
 
 const sleep = (ms: number) => new Promise<void>((r) => window.setTimeout(r, ms));
 
-async function ingest(img: ImageData) {
-  scanThumb.value = makeThumb(img, 300, 400);
-  scanning.value = true;
-  const page = addPage(img, "scan");
-  const found = autoDetect(page);
-  await processPage(page, { full: true, rewriteWarp: true });
-  await sleep(380);
-  scanning.value = false;
-  view.value = "edit";
-  if (!found) {
-    // nothing detected: open the manual frame tool instead of pretending
-    await nextTick();
-    editor.value?.openFrame();
-  }
-}
-
-async function drain() {
-  ingesting = true;
-  try {
-    while (queue.length) {
-      const img = queue.shift()!;
-      await ingest(img);
-    }
-  } finally {
-    ingesting = false;
-  }
-}
-
+/** Every shot lands in the review step first — auto or manual is the user's call. */
 function onCaptured(img: ImageData) {
   queue.push(img);
-  if (!ingesting) void drain();
+  pump();
+}
+
+function pump() {
+  if (pumping || view.value !== "camera") return;
+  const next = queue.shift();
+  if (!next) return;
+  pending.value = next;
+  view.value = "review";
+}
+
+/** Automatic path: detect, warp, enhance, then show the result. */
+async function chooseAuto() {
+  const img = pending.value;
+  if (!img) return;
+  pumping = true;
+  scanThumb.value = makeThumb(img, 300, 400);
+  scanning.value = true;
+  try {
+    const page = addPage(img, "scan");
+    const found = autoDetect(page);
+    await processPage(page, { full: true, rewriteWarp: true });
+    await sleep(340);
+    editorMode.value = found ? "result" : "frame";
+    editorNotice.value = found ? null : "No page edge found — drag the corners";
+    view.value = "edit";
+  } finally {
+    scanning.value = false;
+    pending.value = null;
+    pumping = false;
+    pump();
+  }
+}
+
+/** Manual path: open the corner tool straight away, nothing is processed yet. */
+function chooseManual() {
+  const img = pending.value;
+  if (!img) return;
+  const page = addPage(img, "scan");
+  // a detection guess is a good starting point, but it never blocks the user
+  autoDetect(page);
+  editorMode.value = "frame";
+  editorNotice.value = null;
+  pending.value = null;
+  view.value = "edit";
+  pump();
+}
+
+function retake() {
+  pending.value = null;
+  view.value = "camera";
+  pump();
 }
 
 function onEdit(id: number) {
@@ -58,6 +85,7 @@ function onEdit(id: number) {
 
 function goCamera() {
   view.value = "camera";
+  pump();
 }
 
 function onKey(event: KeyboardEvent) {
@@ -82,10 +110,21 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
         @open-pages="view = 'pages'"
       />
 
+      <CaptureReview
+        v-else-if="view === 'review' && pending"
+        key="review"
+        :src="pending"
+        :page-count="scan.pages.length"
+        @auto="chooseAuto"
+        @manual="chooseManual"
+        @retake="retake"
+      />
+
       <EditorView
         v-else-if="view === 'edit'"
         key="edit"
-        ref="editor"
+        :initial-mode="editorMode"
+        :notice="editorNotice"
         @back="goCamera"
         @done="view = 'pages'"
       />
