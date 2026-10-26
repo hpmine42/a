@@ -320,7 +320,7 @@ watch(autoOn, (on) => {
         <div class="brand" aria-label="flatbed">
           <span class="brand-mark" />
         </div>
-        <div class="camera-top-right">
+        <div v-if="ready" class="camera-top-right">
           <button
             class="round"
             :class="{ on: autoOn }"

@@ -174,6 +174,8 @@ defineExpose({ openFrame: () => (mode.value = "frame") });
         @commit="onCommit"
       />
 
+      <p v-if="mode === 'frame'" class="frame-hint">Drag a corner to adjust</p>
+
       <button v-if="mode === 'frame'" class="auto-pill" @click="runAuto">
         <Icon name="auto" :size="17" />
         <span>Auto</span>

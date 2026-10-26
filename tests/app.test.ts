@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { mount, flushPromises, type VueWrapper } from "@vue/test-utils";
 import App from "../src/App.vue";
 import { clearPages, scan } from "../src/lib/store";
-import { installDomStubs } from "./setup";
+import { allowCamera, denyCamera, installDomStubs } from "./setup";
 
 installDomStubs();
 
@@ -36,6 +36,7 @@ async function openDemoPhoto(wrapper: VueWrapper) {
 
 beforeEach(() => {
   clearPages();
+  denyCamera();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -53,14 +54,23 @@ describe("camera", () => {
     wrapper.unmount();
   });
 
-  it("keeps auto-detection on by default and toggles the frame outline", async () => {
-    const wrapper = mount(App);
+  it("shows the detection toggle only when a stream is live, on by default", async () => {
+    const off = mount(App);
     await tick(20);
+    expect(off.find('button[aria-label="Automatic page detection"]').exists()).toBe(false);
+    off.unmount();
+
+    allowCamera();
+
+    const wrapper = mount(App);
+    await tick(30);
     const autoButton = wrapper.find('button[aria-label="Automatic page detection"]');
     expect(autoButton.exists()).toBe(true);
     expect(autoButton.classes()).toContain("on");
+
     await autoButton.trigger("click");
     expect(autoButton.classes()).not.toContain("on");
+    expect(wrapper.find(".camera-hint").text()).toContain("Detection off");
     wrapper.unmount();
   });
 });

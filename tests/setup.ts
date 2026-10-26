@@ -69,6 +69,38 @@ class ImageDataSim {
   }
 }
 
+export function denyCamera() {
+  Object.defineProperty(navigator, "mediaDevices", {
+    configurable: true,
+    value: {
+      getUserMedia: async () => {
+        const err = new Error("denied");
+        err.name = "NotAllowedError";
+        throw err;
+      },
+    },
+  });
+}
+
+export function allowCamera() {
+  Object.defineProperty(navigator, "mediaDevices", {
+    configurable: true,
+    value: { getUserMedia: async () => fakeCameraStream() },
+  });
+}
+
+export function fakeCameraStream() {
+  const track = {
+    stop: () => undefined,
+    getCapabilities: () => ({}),
+    applyConstraints: async () => undefined,
+  };
+  return {
+    getVideoTracks: () => [track],
+    getTracks: () => [track],
+  } as unknown as MediaStream;
+}
+
 export function installDomStubs() {
   const g = globalThis as unknown as Record<string, unknown>;
 
@@ -97,24 +129,24 @@ export function installDomStubs() {
   g.requestAnimationFrame = (cb: FrameRequestCallback) => window.setTimeout(() => cb(performance.now()), 0);
   g.cancelAnimationFrame = (id: number) => window.clearTimeout(id);
 
-  if (!navigator.mediaDevices) {
-    Object.defineProperty(navigator, "mediaDevices", {
-      configurable: true,
-      value: {
-        getUserMedia: async () => {
-          const err = new Error("denied");
-          err.name = "NotAllowedError";
-          throw err;
-        },
-      },
-    });
-  }
+  denyCamera();
 
   g.createImageBitmap = async () => ({ width: 240, height: 320, close: () => undefined });
 
   Object.defineProperty(HTMLMediaElement.prototype, "play", {
     configurable: true,
     value: async () => undefined,
+  });
+
+  // jsdom rejects arbitrary objects on srcObject; the app only assigns a stream
+  Object.defineProperty(HTMLMediaElement.prototype, "srcObject", {
+    configurable: true,
+    get(this: HTMLMediaElement & { _src?: unknown }) {
+      return this._src ?? null;
+    },
+    set(this: HTMLMediaElement & { _src?: unknown }, value: unknown) {
+      this._src = value;
+    },
   });
 }
 
