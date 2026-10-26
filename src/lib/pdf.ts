@@ -1,4 +1,4 @@
-import { jsPDF } from "jspdf";
+import type { jsPDF as JsPdf } from "jspdf";
 import { enhance, insetQuad, outputSize, warp } from "./cv";
 import { imageDataToCanvas, nextFrame, slug } from "./image";
 import { EDGE_INSET, EXPORT_MAX, type Page } from "./store";
@@ -78,7 +78,10 @@ export async function exportPdf(
   /** Base name for the file, without `.pdf`. */
   name = ""
 ): Promise<string> {
-  let doc: jsPDF | null = null;
+  // jsPDF and its dependencies are ~370 kB that nobody needs until the moment a
+  // PDF is saved, so the whole library is loaded on demand.
+  const { jsPDF } = await import("jspdf");
+  let doc: JsPdf | null = null;
 
   for (let i = 0; i < pages.length; i++) {
     const page = pages[i];

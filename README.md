@@ -62,6 +62,8 @@ camera frame — desk, shadow, skew. After is what the export produces.
 - **Pinch to zoom in the viewfinder**, with 0.5× / 1× / 2× chips and a switch to
   the ultra-wide lens when the phone exposes one. Everywhere else the app holds
   pinch-to-zoom shut, because it only ever fights the user.
+- **Light on first load.** jsPDF and its dependencies (~370 kB) are only
+  downloaded when a PDF is actually saved; the app itself is 53 kB gzipped.
 - **Installable** — a real PWA with an offline shell. Add it to the home screen
   and it keeps working with no network at all.
 

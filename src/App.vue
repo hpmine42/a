@@ -7,7 +7,7 @@ import PagesView from "./components/PagesView.vue";
 import { detectPageQuad, fullFrameQuad, type Quad } from "./lib/cv";
 import { tap, thump } from "./lib/haptics";
 import { makeThumb, nextFrame } from "./lib/image";
-import { addPage, processPage, scan } from "./lib/store";
+import { addPage, FIRST_RENDER, processPage, scan } from "./lib/store";
 
 type View = "camera" | "review" | "edit" | "pages";
 type Shot = { img: ImageData; quad: Quad | null; auto: boolean };
@@ -21,6 +21,8 @@ const pendingAuto = ref(false);
 /** The review sheet is working (a full detection pass), so it must stay put. */
 const reviewBusy = ref(false);
 const editorMode = ref<"result" | "frame">("result");
+/** Where the editor goes back to: the camera after a shot, the grid after a tap. */
+const editorReturn = ref<"camera" | "pages">("camera");
 const editorNotice = ref<string | null>(null);
 
 const queue: Shot[] = [];
@@ -65,9 +67,12 @@ async function applyDetected(img: ImageData, quad: Quad) {
     const page = addPage(img, "scan");
     page.quad = quad;
     page.warped = null;
-    await processPage(page, { full: true, rewriteWarp: true });
+    // Enough pixels for the first look and for a sharp thumbnail; the editor
+    // re-renders at screen size only if its stage needs more than this.
+    await processPage(page, { full: true, rewriteWarp: true, maxSide: FIRST_RENDER });
     editorMode.value = "result";
     editorNotice.value = null;
+    editorReturn.value = "camera";
     view.value = "edit";
   } finally {
     scanning.value = false;
@@ -96,6 +101,7 @@ async function chooseAuto() {
       page.warped = null;
       editorMode.value = "frame";
       editorNotice.value = "No page edge found — drag the corners";
+      editorReturn.value = "camera";
       view.value = "edit";
     }
   } finally {
@@ -119,6 +125,7 @@ function chooseManual() {
   page.warped = null;
   editorMode.value = "frame";
   editorNotice.value = null;
+  editorReturn.value = "camera";
   view.value = "edit";
 }
 
@@ -133,6 +140,7 @@ function chooseWhole() {
   page.warped = null;
   editorMode.value = "frame";
   editorNotice.value = "Drag the corners if you want a tighter crop";
+  editorReturn.value = "camera";
   view.value = "edit";
 }
 
@@ -146,7 +154,19 @@ function retake() {
 
 function onEdit(id: number) {
   scan.activeId = id;
+  editorMode.value = "result";
+  editorNotice.value = null;
+  editorReturn.value = "pages";
   view.value = "edit";
+}
+
+/** Leaving the editor: back where the user came from, never a surprise jump. */
+function leaveEditor() {
+  if (editorReturn.value === "pages") {
+    view.value = "pages";
+    return;
+  }
+  goCamera();
 }
 
 function goCamera() {
@@ -156,7 +176,8 @@ function goCamera() {
 
 function onKey(event: KeyboardEvent) {
   if (event.key !== "Escape") return;
-  if (view.value === "edit" || view.value === "pages" || view.value === "review") goCamera();
+  if (view.value === "edit") leaveEditor();
+  else if (view.value === "pages" || view.value === "review") goCamera();
 }
 
 onMounted(() => window.addEventListener("keydown", onKey));
@@ -193,7 +214,8 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
         key="edit"
         :initial-mode="editorMode"
         :notice="editorNotice"
-        @back="goCamera"
+        :back-to="editorReturn"
+        @back="leaveEditor"
         @done="view = 'pages'"
       />
 

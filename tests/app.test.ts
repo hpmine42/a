@@ -248,6 +248,28 @@ describe("editor", () => {
     wrapper.unmount();
   });
 
+  it("renders the new crop when Done is tapped straight from the crop tool", async () => {
+    stubDemoFetch();
+    const wrapper = mount(App);
+    await tick(20);
+    await shootDemo(wrapper);
+    await choose(wrapper, "Crop it by hand");
+
+    const page = scan.pages[0];
+    const before = page.result;
+    const editor = wrapper.findComponent({ name: "CornerEditor" });
+    const next = page.quad.map((p) => ({ x: p.x * 0.7, y: p.y * 0.7 }));
+    editor.vm.$emit("update:quad", next);
+    await wrapper.find("button.done").trigger("click");
+    await tick(500);
+
+    // the grid shows the page that was just cropped, not the one before it
+    expect(wrapper.find(".pages").exists()).toBe(true);
+    expect(page.result).not.toBe(before);
+    expect(page.cacheKey).not.toBe("");
+    wrapper.unmount();
+  });
+
   it("does no image work while the corner tool is open", async () => {
     stubDemoFetch();
     const wrapper = mount(App);
@@ -330,6 +352,28 @@ describe("pages", () => {
     expect(scan.pages.length).toBe(1);
     expect(wrapper.findAll(".page-card").length).toBe(1);
     expect(wrapper.find(".undo-bar").exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("returns to the page grid when the editor was opened from it", async () => {
+    stubDemoFetch();
+    const wrapper = mount(App);
+    await tick(20);
+    await shootDemo(wrapper);
+    await choose(wrapper, "Crop it by hand");
+    await wrapper.find("button.done").trigger("click");
+    await tick(100);
+    expect(wrapper.find(".pages").exists()).toBe(true);
+
+    // tap the thumbnail: the editor opens, and Back must lead to the grid again
+    await wrapper.find(".page-thumb").trigger("click");
+    await tick(200);
+    expect(wrapper.find(".editor").exists()).toBe(true);
+    expect(wrapper.find('.editor-top button[aria-label="Back to pages"]').exists()).toBe(true);
+
+    await wrapper.find('.editor-top button[aria-label="Back to pages"]').trigger("click");
+    await tick(100);
+    expect(wrapper.find(".pages").exists()).toBe(true);
     wrapper.unmount();
   });
 

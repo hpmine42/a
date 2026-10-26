@@ -8,8 +8,13 @@ import { canvasFor, containFit } from "../lib/image";
 import { activePage, autoDetect, CROP_MAX, PREVIEW_MAX, processPage, scan } from "../lib/store";
 
 const props = withDefaults(
-  defineProps<{ initialMode?: "result" | "frame"; notice?: string | null }>(),
-  { initialMode: "result", notice: null }
+  defineProps<{
+    initialMode?: "result" | "frame";
+    notice?: string | null;
+    /** Where the back chip leads, so its label tells the truth. */
+    backTo?: "camera" | "pages";
+  }>(),
+  { initialMode: "result", notice: null, backTo: "camera" }
 );
 
 const emit = defineEmits<{ (e: "back"): void; (e: "done"): void }>();
@@ -38,6 +43,9 @@ const notice = ref<string | null>(props.notice);
 let noticeTimer = 0;
 const busy = ref(false);
 let busyTimer = 0;
+/** The canvas just changed under the user: a 200ms dip says "this is new". */
+const swapping = ref(false);
+let swapTimer = 0;
 const stage = ref<HTMLDivElement | null>(null);
 const resultCanvas = ref<HTMLCanvasElement | null>(null);
 const pageIndex = computed(() => scan.pages.findIndex((p) => p.id === scan.activeId) + 1);
@@ -48,6 +56,8 @@ let drawFrame = 0;
 let resizeTimer = 0;
 /** Long side of the render the canvas is showing right now. */
 let renderedSide = 0;
+/** The crop changed but has not been rendered yet. */
+let cropDirty = false;
 /** Bumped per reprocess so a slower, older pass cannot overwrite a newer one. */
 let generation = 0;
 
@@ -147,6 +157,9 @@ async function setOptimize(next: boolean) {
   click();
   current.opts.optimize = next;
   await reprocess({});
+  swapping.value = true;
+  window.clearTimeout(swapTimer);
+  swapTimer = window.setTimeout(() => (swapping.value = false), 220);
 }
 
 async function toggleOptimize() {
@@ -160,8 +173,10 @@ function toggleFrame() {
     // the corner tool works on the photo; nothing to render yet
     notice.value = null;
   } else {
-    // leaving the crop tool: this is the one pass that has to be at full preview
-    void reprocess({ rewriteWarp: true });
+    // leaving the crop tool: this is the one pass that has to be on screen
+    void reprocess({ rewriteWarp: true })
+      .then(() => (cropDirty = false))
+      .catch(() => undefined);
   }
 }
 
@@ -177,6 +192,28 @@ function onQuad(next: Quad) {
   current.warped = null;
   current.warpedSide = 0;
   current.cacheKey = "";
+  cropDirty = true;
+}
+
+/**
+ * Catching up after the crop tool: the grid, the filmstrip and the export all
+ * read the page, not this component, so leaving mid-crop must not leave a stale
+ * thumbnail behind. Rendered small and in the background — the user has already
+ * moved on.
+ */
+function refreshQuietly() {
+  const current = page.value;
+  if (!current || !cropDirty) return;
+  cropDirty = false;
+  void processPage(current, { full: true, rewriteWarp: true, maxSide: neededSide() })
+    .then(queueDraw)
+    .catch(() => undefined);
+}
+
+function finish() {
+  tap();
+  refreshQuietly();
+  emit("done");
 }
 
 function onCommit() {
@@ -240,10 +277,14 @@ onMounted(async () => {
   });
   if (stage.value) observer.observe(stage.value);
   await nextTick();
-  if (page.value && (!page.value.result || page.value.warpedSide !== neededSide())) {
-    await reprocess({ rewriteWarp: true });
+  const current = page.value;
+  const want = neededSide();
+  // an existing render at *or above* what the screen needs is good enough: a
+  // 1400px preview on a 1250px stage is not worth re-warping
+  if (current && (!current.result || current.warpedSide < want * 0.92)) {
+    await reprocess({ rewriteWarp: !current.warped, maxSide: want });
   } else {
-    renderedSide = page.value?.warpedSide ?? 0;
+    renderedSide = current?.warpedSide ?? 0;
     queueDraw();
   }
   if (props.notice) {
@@ -253,6 +294,8 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  window.clearTimeout(swapTimer);
+  refreshQuietly();
   observer?.disconnect();
   window.clearTimeout(resizeTimer);
   window.clearTimeout(busyTimer);
@@ -266,7 +309,11 @@ defineExpose({ openFrame: () => (mode.value = "frame") });
 <template>
   <div class="editor" v-if="page">
     <header class="editor-top">
-      <button class="control" aria-label="Back to camera" @click="emit('back')">
+      <button
+        class="control"
+        :aria-label="props.backTo === 'pages' ? 'Back to pages' : 'Back to camera'"
+        @click="emit('back')"
+      >
         <Icon name="back" :size="19" />
         <span>Back</span>
       </button>
@@ -288,7 +335,12 @@ defineExpose({ openFrame: () => (mode.value = "frame") });
     </header>
 
     <div class="editor-stage" ref="stage">
-      <canvas v-show="mode === 'result'" ref="resultCanvas" class="paper-canvas" />
+      <canvas
+        v-show="mode === 'result'"
+        ref="resultCanvas"
+        class="paper-canvas"
+        :class="{ swapping }"
+      />
 
       <CornerEditor
         v-if="mode === 'frame'"
@@ -328,12 +380,12 @@ defineExpose({ openFrame: () => (mode.value = "frame") });
         </span>
         <span class="optimize-text">
           <strong>Optimize</strong>
-          <small>{{ optimizing ? "On · crisp text, white paper" : "Off · photo as taken" }}</small>
+          <small>{{ optimizing ? "On · crisp text" : "Off · untouched" }}</small>
         </span>
         <span class="optimize-switch" aria-hidden="true"><span /></span>
       </button>
 
-      <button class="done" aria-label="Done with this page" @click="tap(); emit('done')">
+      <button class="done" aria-label="Done with this page" @click="finish">
         <Icon name="check" :size="20" :stroke="2.4" />
         <span>Done</span>
       </button>

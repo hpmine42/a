@@ -960,6 +960,21 @@ img {
     0 2px 8px rgba(0, 0, 0, 0.4);
 }
 
+/* A breath of a fade when the same page is re-rendered in the other mode: the
+   eye reads it as "that changed", not as a glitch. */
+.paper-canvas.swapping {
+  animation: paper-swap 0.22s var(--ease);
+}
+
+@keyframes paper-swap {
+  from {
+    opacity: 0.35;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
 .corner-editor {
   position: absolute;
   inset: 0;
