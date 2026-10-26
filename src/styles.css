@@ -332,8 +332,7 @@ img {
   align-items: center;
   gap: calc(9px * var(--u));
   height: var(--icon-btn);
-  min-width: var(--icon-btn);
-  padding: 0 calc(15px * var(--u)) 0 calc(14px * var(--u));
+  padding: 0 calc(18px * var(--u));
   border-radius: 999px;
   background: rgba(20, 23, 28, 0.62);
   border: 1px solid rgba(255, 255, 255, 0.1);
@@ -345,14 +344,6 @@ img {
   font-weight: 700;
   letter-spacing: 0.01em;
   color: var(--text);
-}
-
-.brand-mark {
-  width: calc(16px * var(--u));
-  height: calc(21px * var(--u));
-  border-radius: 2.5px;
-  background: linear-gradient(155deg, #ffdcaf, var(--amber));
-  box-shadow: 0 0 16px rgba(255, 192, 97, 0.45);
 }
 
 .shutter-flash {
