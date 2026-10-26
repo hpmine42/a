@@ -75,3 +75,46 @@ describe("readme", () => {
     expect(readme).not.toContain("being renamed");
   });
 });
+
+describe("web app manifest", () => {
+  const manifest = JSON.parse(read("public/manifest.webmanifest"));
+
+  it("declares an identity, so a reinstall cannot become a second app", () => {
+    expect(manifest.id).toBe("./");
+    expect(manifest.start_url).toBe("./");
+    expect(manifest.scope).toBe("./");
+  });
+
+  it("is installable: standalone display, both icon sizes, a maskable one", () => {
+    expect(manifest.display).toBe("standalone");
+    const sizes = manifest.icons.map((i: { sizes: string }) => i.sizes);
+    expect(sizes).toContain("192x192");
+    expect(sizes).toContain("512x512");
+    expect(
+      manifest.icons.some((i: { purpose?: string }) => i.purpose?.includes("maskable"))
+    ).toBe(true);
+  });
+
+  it("declares itself as a related app so a stale install can be detected", () => {
+    expect(manifest.prefer_related_applications).toBe(false);
+    const related = manifest.related_applications ?? [];
+    expect(related.length).toBeGreaterThan(0);
+    expect(related[0].platform).toBe("webapp");
+    expect(related[0].url).toMatch(/manifest\.webmanifest$/);
+  });
+});
+
+describe("service worker", () => {
+  const sw = read("public/sw.js");
+
+  it("precaches the shell, so a cold launch is never an error page", () => {
+    expect(sw).toMatch(/const SHELL = \[/);
+    expect(sw).toMatch(/cache\.add\(abs\(path\)\)/);
+  });
+
+  it("has an offline page instead of returning a network error", () => {
+    expect(sw).toMatch(/OFFLINE_PAGE/);
+    expect(sw).toMatch(/new Response\(OFFLINE_PAGE/);
+    expect(sw).not.toMatch(/Response\.error\(\)/);
+  });
+});

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 import App from "../src/App.vue";
 import { clearPages, scan } from "../src/lib/store";
@@ -340,6 +340,33 @@ describe("ultra wide", () => {
 
     const chips = wrapper.findAll("button.zoom-chip").map((c) => c.text());
     expect(chips).toContain("0.5×");
+    wrapper.unmount();
+  });
+});
+
+describe("installed app", () => {
+  afterEach(() => {
+    delete (navigator as unknown as { getInstalledRelatedApps?: unknown }).getInstalledRelatedApps;
+  });
+
+  it("offers to fix a stale home-screen copy when the browser reports one", async () => {
+    (navigator as unknown as { getInstalledRelatedApps?: unknown }).getInstalledRelatedApps = async () => [
+      { platform: "webapp", id: "https://example.test/scanner/" },
+    ];
+
+    const wrapper = mount(App);
+    await tick(60);
+
+    expect(wrapper.text()).toContain("Fix the installed app");
+    expect(wrapper.text()).toContain("An old copy is still on this phone");
+    wrapper.unmount();
+  });
+
+  it("says nothing about installing when there is no prompt and no entry", async () => {
+    const wrapper = mount(App);
+    await tick(60);
+
+    expect(wrapper.find(".install-bar").exists()).toBe(false);
     wrapper.unmount();
   });
 });

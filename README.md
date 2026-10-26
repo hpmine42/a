@@ -165,6 +165,29 @@ The B&W output runs a despeckle pass after the adaptive threshold: paper grain
 and JPEG noise become visible dirt once a page is pure black and white, and
 isolated pixels are not glyphs.
 
+## Installing it as an app
+
+Chrome/Android: open the site, tap **Install Scano** in the viewfinder. iOS: Share
+→ *Add to Home Screen*. It then runs standalone, offline included.
+
+### "It says it is already installed, and it will not open"
+
+This is the one install failure that has nothing to do with the code. GitHub does
+not redirect a project site after a repository is renamed: an app installed while
+the site lived at `/scanner/` keeps a start address that now returns 404. Android
+still lists the entry — so the install sheet says *already installed* — and
+launching it fails, because there is nothing at that address any more.
+
+The page detects that situation (`getInstalledRelatedApps()` against the
+`related_applications` entry in the manifest) and offers **Fix the installed
+app** with the two steps below. Doing it by hand works just as well:
+
+1. Long-press the Scano icon → **App info** → **Uninstall**.
+   No icon? **Settings → Apps → Scano → Uninstall**.
+2. Reload the site and tap **Install Scano** again.
+
+Only one install exists afterwards, and it points at the current address.
+
 ## Deployment
 
 CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on every push
