@@ -51,10 +51,20 @@ Both images come from the demo photo that ships with the app.
 
 ## Mobile first
 
-One thumb, one hand: full-bleed viewfinder, 44px+ targets, safe-area aware
-docks, `100dvh` layout and no horizontal overflow. The desktop-only "phone on a
-desk" frame is gated behind `(hover: hover) and (pointer: fine)` so a real phone
-always gets the whole screen.
+One thumb, one hand: full-bleed viewfinder, 52px chips, a 96px shutter (the same
+diameter as Google's camera), safe-area aware docks, `100dvh` layout and no
+horizontal overflow. Every size is a token multiplied by `--u`, so the whole UI
+can scale as one piece. The desktop-only "phone on a desk" frame is gated behind
+`(hover: hover) and (pointer: fine)` so a real phone always gets the whole
+screen.
+
+Sizes are deliberately matched to Google's scanner: 96px shutter, 52px labelled
+chips, 54px round buttons, 12.5px captions.
+
+Some phones browse in "desktop site" mode, which reports a ~980px viewport on a
+~410px screen and makes the browser paint everything at about 40%. `src/lib/fit.ts`
+measures that mismatch and sets `--u`, so the UI comes out the right size anyway.
+`?u=2.4` forces a scale by hand if a browser is being creative.
 
 ## How the detection works
 
