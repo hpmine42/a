@@ -1,20 +1,24 @@
 {
-  "name": "Scano \u2014 document scanner",
+  "id": "./",
+  "name": "Scano — document scanner",
   "short_name": "Scano",
   "description": "Photograph a document, get a clean scanned PDF. Nothing is uploaded.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "launch_handler": { "client_mode": "navigate-existing" },
   "background_color": "#08090b",
   "theme_color": "#08090b",
   "orientation": "portrait",
-  "icons": [
+  "prefer_related_applications": false,
+  "related_applications": [
     {
-      "src": "icon.svg",
-      "sizes": "any",
-      "type": "image/svg+xml",
-      "purpose": "any"
-    },
+      "platform": "webapp",
+      "url": "https://hpmine42.github.io/scano/manifest.webmanifest"
+    }
+  ],
+  "icons": [
     {
       "src": "icon-192.png",
       "sizes": "192x192",
@@ -32,6 +36,12 @@
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"
+    },
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
     }
   ]
 }

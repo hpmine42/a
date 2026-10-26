@@ -619,6 +619,96 @@ img {
   color: var(--muted);
 }
 
+/* Install invitation — only ever rendered when the browser can actually
+   install, or when a stale home-screen copy needs removing. */
+.install-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: calc(8px * var(--u));
+  padding: 0 calc(12px * var(--u));
+}
+
+.install-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(7px * var(--u));
+  height: calc(40px * var(--u));
+  padding: 0 calc(16px * var(--u)) 0 calc(13px * var(--u));
+  border-radius: 999px;
+  font-size: calc(13.5px * var(--u));
+  font-weight: 650;
+  color: #1a1305;
+  background: linear-gradient(160deg, #ffd79a, var(--amber));
+  box-shadow: 0 6px 18px rgba(255, 192, 97, 0.22);
+  transition: transform 0.12s var(--ease);
+}
+
+.install-chip:active {
+  transform: scale(0.96);
+}
+
+.install-chip svg {
+  width: 1.15em;
+  height: 1.15em;
+}
+
+.install-chip.warn {
+  color: var(--amber);
+  background: rgba(255, 192, 97, 0.12);
+  border: 1px solid rgba(255, 192, 97, 0.5);
+  box-shadow: none;
+}
+
+.install-note {
+  font-size: calc(12px * var(--u));
+  color: var(--muted-2);
+}
+
+.install-fix {
+  margin: 0 calc(14px * var(--u));
+  padding: calc(14px * var(--u));
+  border-radius: calc(16px * var(--u));
+  font-size: calc(13px * var(--u));
+  line-height: 1.5;
+  color: var(--text);
+  background: rgba(20, 23, 28, 0.92);
+  border: 1px solid var(--line-strong);
+  backdrop-filter: blur(14px);
+}
+
+.install-fix p {
+  margin: 0 0 calc(8px * var(--u));
+  color: var(--muted);
+}
+
+.install-fix ol {
+  margin: 0;
+  padding-left: calc(18px * var(--u));
+}
+
+.install-fix li + li {
+  margin-top: calc(6px * var(--u));
+}
+
+.install-fix b {
+  color: var(--text);
+  font-weight: 650;
+}
+
+.install-close {
+  margin-top: calc(12px * var(--u));
+  height: calc(36px * var(--u));
+  padding: 0 calc(16px * var(--u));
+  border-radius: 999px;
+  font-size: calc(13px * var(--u));
+  font-weight: 600;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--line-strong);
+}
+
 .camera-hint {
   display: flex;
   align-items: center;

@@ -3,6 +3,14 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import Icon from "./Icon.vue";
 import type { Pt, Quad } from "../lib/cv";
 import { bitmapToImageData, cropRegion, imageDataFromFile } from "../lib/image";
+import {
+  installedRelatedApps,
+  isStaleInstall,
+  isStandaloneDisplay,
+  promptInstall,
+  shouldOfferInstall,
+  watchInstallPrompt,
+} from "../lib/install";
 import { IMPORT_MAX } from "../lib/store";
 
 const props = defineProps<{ thumbs: string[]; pageCount: number }>();
@@ -38,6 +46,33 @@ const usingUltra = ref(false);
 
 const zoomLabel = computed(() => `${(usingUltra.value ? 0.5 : zoom.value * softZoom.value).toFixed(1)}×`);
 const showZoomRow = computed(() => ready.value);
+
+/* ---------------------------------------------------------------- install */
+
+const standalone = ref(false);
+const promptReady = ref(false);
+const staleInstall = ref(false);
+const fixOpen = ref(false);
+const offerInstall = computed(() => shouldOfferInstall({ promptReady: promptReady.value, standalone: standalone.value }));
+let unwatchInstall: (() => void) | null = null;
+
+async function detectInstallState() {
+  const matches =
+    typeof window.matchMedia === "function" ? window.matchMedia("(display-mode: standalone)").matches : false;
+  standalone.value = isStandaloneDisplay(matches, (window.navigator as { standalone?: boolean }).standalone);
+  // only ask when this is the browser: inside the app the answer is "us"
+  if (standalone.value) {
+    staleInstall.value = false;
+    return;
+  }
+  staleInstall.value = isStaleInstall(await installedRelatedApps(), standalone.value);
+}
+
+async function installNow() {
+  const outcome = await promptInstall();
+  promptReady.value = false;
+  if (outcome === "accepted") staleInstall.value = false;
+}
 
 type ZoomRange = { min: number; max: number; step: number };
 function zoomCapability(track: MediaStreamTrack | undefined): ZoomRange | undefined {
@@ -439,6 +474,16 @@ let observer: ResizeObserver | null = null;
 
 onMounted(async () => {
   ensureWorker();
+  unwatchInstall = watchInstallPrompt({
+    onAvailable: () => (promptReady.value = true),
+    onInstalled: () => {
+      standalone.value = true;
+      staleInstall.value = false;
+      promptReady.value = false;
+    },
+  });
+  void detectInstallState();
+  window.addEventListener("focus", detectInstallState);
   await startStream(facing.value);
   raf = requestAnimationFrame(loop);
   observer = new ResizeObserver(() => draw());
@@ -447,6 +492,8 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   disposed = true;
+  unwatchInstall?.();
+  window.removeEventListener("focus", detectInstallState);
   cancelAnimationFrame(raf);
   observer?.disconnect();
   worker?.terminate();
@@ -576,6 +623,33 @@ watch(autoOn, (on) => {
         <img :src="props.thumbs[props.thumbs.length - 1]" alt="" />
         <span class="stack-badge">{{ props.pageCount }}</span>
       </button>
+    </div>
+
+    <div v-if="offerInstall || staleInstall" class="install-bar">
+      <template v-if="offerInstall">
+        <button class="install-chip" @click="installNow">
+          <Icon name="plus" :size="17" />
+          <span>Install Scano</span>
+        </button>
+        <span class="install-note">Works offline, opens without the browser bar</span>
+      </template>
+      <template v-else>
+        <button class="install-chip warn" :aria-expanded="fixOpen" @click="fixOpen = !fixOpen">
+          <Icon name="sparkle" :size="17" />
+          <span>Fix the installed app</span>
+        </button>
+        <span class="install-note">An old copy is still on this phone</span>
+      </template>
+    </div>
+
+    <div v-if="staleInstall && fixOpen" class="install-fix">
+      <p>Chrome thinks Scano is already installed, but the entry points at an address that no longer exists. Remove it once, then install again:</p>
+      <ol>
+        <li>Long-press the Scano icon on the home screen → <b>App info</b> → <b>Uninstall</b>.<br />
+          No icon? <b>Settings → Apps → Scano → Uninstall</b>.</li>
+        <li>Come back to this page and tap <b>Install Scano</b>.</li>
+      </ol>
+      <button class="install-close" @click="fixOpen = false">Got it</button>
     </div>
 
     <p class="camera-hint">
