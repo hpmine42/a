@@ -54,7 +54,7 @@ const src = new ImageDataShim(
   raw.height
 ) as unknown as ImageData;
 
-console.log(`\nflatbed · cv smoke test\n  source ${src.width}×${src.height}\n`);
+console.log(`\nScano · cv smoke test\n  source ${src.width}×${src.height}\n`);
 
 const t0 = performance.now();
 const quad = detectPageQuad(src);

@@ -70,8 +70,8 @@ describe("pdfFilename", () => {
   });
 
   it("falls back to a sane name when the field is empty", () => {
-    expect(pdfFilename("   ", 1)).toBe("scan.pdf");
-    expect(pdfFilename("", 3)).toBe("scan-3-pages.pdf");
+    expect(pdfFilename("   ", 1)).toBe("Scano scan.pdf");
+    expect(pdfFilename("", 3)).toBe("Scano scan 3 pages.pdf");
   });
 
   it("caps the length so a paste cannot produce an unopenable file", () => {

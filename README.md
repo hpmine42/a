@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/banner.svg" alt="flatbed — the scanner that lives in your browser" width="100%">
+  <img src="docs/banner.svg" alt="Scano — the scanner that lives in your browser" width="100%">
 </p>
 
 <p align="center">
@@ -21,12 +21,12 @@ You need one page as a PDF. So you take a phone photo — crooked, grey, a shado
 across the bottom, half the desk in frame — and every scanner app wants an
 account and an upload.
 
-flatbed does the boring part properly, in the browser, and the photo never
+Scano does the boring part properly, in the browser, and the photo never
 leaves the device.
 
 ## Before / after
 
-| Camera photo | flatbed |
+| Camera photo | Scano |
 |---|---|
 | ![](docs/before.jpg) | ![](docs/after.jpg) |
 
@@ -37,7 +37,7 @@ Both images come from the demo photo that ships with the app.
 - **Optional live detection.** The *Detect* toggle is off by default; switched on,
   a worker finds the sheet ~2-3×/second and the outline eases into place.
 - **The shutter is never a surprise.** If the viewfinder is already framing a
-  sheet, that crop is used without asking. If it is not, flatbed asks: crop by
+  sheet, that crop is used without asking. If it is not, Scano asks: crop by
   hand, detect this photo, or keep the whole frame.
 - **Manual framing that actually lands.** Drag any corner with a magnifier loupe
   (it shows exactly the pixel under your finger), or drag the whole sheet. Every

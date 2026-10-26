@@ -7,9 +7,11 @@
       content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
     />
     <meta name="theme-color" content="#0a0b0d" />
+    <meta name="application-name" content="Scano" />
+    <meta name="apple-mobile-web-app-title" content="Scano" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <title>flatbed — scan paper, keep the pixels</title>
+    <title>Scano — scan paper, keep the pixels</title>
     <meta
       name="description"
       content="Photograph a document, get a straight, clean, multi-page PDF. Perspective fix, shadow removal, nothing uploaded."
@@ -98,13 +100,13 @@
          page now means "the bundle really did not start" — and says so. -->
     <div id="boot" role="status" aria-live="polite">
       <div class="mark"></div>
-      <h1>flatbed</h1>
+      <h1>Scano</h1>
       <p class="boot-msg">Opening the scanner…</p>
     </div>
 
     <noscript>
       <div id="boot-noscript">
-        <p>flatbed needs JavaScript — all the image work happens on this device.</p>
+        <p>Scano needs JavaScript — all the image work happens on this device.</p>
       </div>
     </noscript>
 
@@ -120,7 +122,7 @@
           failed = true;
           if (msg) {
             msg.textContent =
-              "flatbed did not start (" + reason + "). This is usually a stale copy " +
+              "Scano did not start (" + reason + "). This is usually a stale copy " +
               "or a half-finished deploy — reloading normally fixes it.";
           }
           if (!box.querySelector("button")) {

@@ -1,6 +1,6 @@
 {
-  "name": "flatbed — document scanner",
-  "short_name": "flatbed",
+  "name": "Scano — document scanner",
+  "short_name": "Scano",
   "description": "Photograph a document, get a clean scanned PDF. Nothing is uploaded.",
   "start_url": "./",
   "scope": "./",

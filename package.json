@@ -1,9 +1,9 @@
 {
-  "name": "flatbed",
+  "name": "scano",
   "private": true,
   "version": "0.2.0",
   "type": "module",
-  "description": "The flatbed scanner that lives in your browser. No upload, no account.",
+  "description": "The document scanner that lives in your browser. No upload, no account.",
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 5173",
     "build": "vue-tsc --noEmit && vite build && node scripts/check-dist.mjs",

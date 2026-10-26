@@ -1,7 +1,7 @@
-/* flatbed service worker: keep the shell available offline.
+/* Scano service worker: keep the shell available offline.
  * Files are content-hashed by the build, so a plain stale-while-revalidate
  * cache is both safe and enough — no precache manifest to go out of date. */
-const CACHE = "flatbed-v4";
+const CACHE = "scano-v1";
 
 self.addEventListener("install", (event) => {
   self.skipWaiting();

@@ -1,5 +1,5 @@
 /* ==========================================================================
-   flatbed — design tokens
+   Scano — design tokens
    One accent, three surfaces, no decoration that does not carry meaning.
    ========================================================================== */
 
@@ -326,15 +326,25 @@ img {
   gap: calc(8px * var(--u));
 }
 
+/* Mark + wordmark: on first launch the app has to say its own name. */
 .brand {
-  display: grid;
-  place-items: center;
-  width: var(--icon-btn);
+  display: inline-flex;
+  align-items: center;
+  gap: calc(9px * var(--u));
   height: var(--icon-btn);
-  border-radius: calc(15px * var(--u));
+  min-width: var(--icon-btn);
+  padding: 0 calc(15px * var(--u)) 0 calc(14px * var(--u));
+  border-radius: 999px;
   background: rgba(20, 23, 28, 0.62);
   border: 1px solid rgba(255, 255, 255, 0.1);
   backdrop-filter: blur(14px);
+}
+
+.brand-name {
+  font-size: calc(15px * var(--u));
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: var(--text);
 }
 
 .brand-mark {
