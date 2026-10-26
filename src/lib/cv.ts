@@ -1,4 +1,4 @@
-// Flatbed — tiny, dependency-free image pipeline.
+// Scano — tiny, dependency-free image pipeline.
 // Everything here runs on the main thread in plain JS; quality matters more than micro-speed.
 
 export type Pt = { x: number; y: number };

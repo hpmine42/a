@@ -20,11 +20,11 @@ const formats: { id: PageFormat; label: string; hint: string }[] = [
 ];
 const label = computed(() => (scan.pages.length === 1 ? "1 page" : `${scan.pages.length} pages`));
 
-/** A friendly default: "scan 2026-10-26", editable before saving. */
+/** A friendly default: "Scano 2026-10-26", editable before saving. */
 function suggestedName(): string {
   const d = new Date();
   const pad = (n: number) => String(n).padStart(2, "0");
-  return `scan ${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  return `Scano ${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
 onMounted(() => {
@@ -92,7 +92,7 @@ async function savePdf() {
             autocapitalize="off"
             spellcheck="false"
             maxlength="80"
-            placeholder="scan 2026-10-26"
+            placeholder="Scano 2026-10-26"
             :aria-describedby="'pdf-name-hint'"
           />
           <span class="name-ext" aria-hidden="true">.pdf</span>

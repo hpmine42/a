@@ -58,6 +58,8 @@ describe("camera", () => {
     expect(wrapper.find(".shutter").exists()).toBe(true);
     expect(wrapper.text()).toContain("Choose photo");
     expect(wrapper.text()).toContain("Demo photo");
+    // the viewfinder says the product's name
+    expect(wrapper.find(".brand-name").text()).toBe("Scano");
     // the dock is labelled, not a row of anonymous icons
     expect(wrapper.text()).toContain("Photos");
     expect(wrapper.text()).toContain("Flip");
@@ -320,7 +322,7 @@ describe("pdf naming", () => {
     const field = wrapper.find("#pdf-name");
     expect(field.exists()).toBe(true);
     // a sensible default is filled in already
-    expect((field.element as HTMLInputElement).value).toMatch(/^scan \d{4}-\d{2}-\d{2}$/);
+    expect((field.element as HTMLInputElement).value).toMatch(/^Scano \d{4}-\d{2}-\d{2}$/);
     expect(wrapper.text()).toContain(".pdf");
 
     await field.setValue("Rechnung August");

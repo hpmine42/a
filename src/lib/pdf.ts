@@ -66,7 +66,7 @@ export function pdfFilename(input: string, pages: number): string {
       .replace(/[\\/:*?"<>|]+/g, "-")
       .replace(/\s+/g, " ")
       .replace(/^[.\s-]+|[.\s-]+$/g, "")
-      .slice(0, 80) || (pages === 1 ? "scan" : `scan-${pages}-pages`);
+      .slice(0, 80) || (pages === 1 ? "Scano scan" : `Scano scan ${pages} pages`);
   return `${base}.pdf`;
 }
 

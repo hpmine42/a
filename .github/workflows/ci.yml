@@ -40,7 +40,7 @@ jobs:
       - name: Upload site
         uses: actions/upload-artifact@v4
         with:
-          name: flatbed-site
+          name: scano-site
           path: dist
           retention-days: 7
 
@@ -58,7 +58,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: flatbed-site
+          name: scano-site
           path: dist
 
       - uses: actions/configure-pages@v5
