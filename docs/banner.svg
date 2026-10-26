@@ -1,59 +1,47 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 300" width="1200" height="300" role="img" aria-label="Scano">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 320" width="1200" height="320" role="img" aria-label="Scano — photos in, clean scanned PDF out">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#101318"/>
-      <stop offset="100%" stop-color="#0a0c10"/>
+      <stop offset="0" stop-color="#12151b"/>
+      <stop offset="1" stop-color="#08090b"/>
     </linearGradient>
-    <linearGradient id="paper" x1="0" y1="0" x2="0.4" y2="1">
-      <stop offset="0%" stop-color="#ffffff"/>
-      <stop offset="100%" stop-color="#cfd6e0"/>
+    <linearGradient id="paper" x1="0" y1="0" x2="0.5" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#d8dde5"/>
     </linearGradient>
-    <linearGradient id="amber" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#ffd7a8"/>
-      <stop offset="100%" stop-color="#ffb86b"/>
+    <linearGradient id="amber" x1="0" y1="0" x2="0.4" y2="1">
+      <stop offset="0" stop-color="#ffd79a"/>
+      <stop offset="1" stop-color="#ffb648"/>
     </linearGradient>
-    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
-      <feGaussianBlur stdDeviation="14" result="b"/>
-      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
-    </filter>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#ffc061" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#ffc061" stop-opacity="0"/>
+    </radialGradient>
   </defs>
 
-  <rect width="1200" height="300" fill="url(#bg)"/>
-  <g opacity="0.35">
-    <circle cx="1010" cy="60" r="190" fill="#ffb86b" opacity="0.10"/>
-    <circle cx="120" cy="260" r="150" fill="#5b8cff" opacity="0.10"/>
-  </g>
+  <rect width="1200" height="320" fill="url(#bg)"/>
 
-  <!-- crooked photo becoming a straight sheet -->
-  <g transform="translate(120 70) rotate(-9 60 80)">
-    <rect x="0" y="0" width="120" height="160" rx="4" fill="#e9e2d5" opacity="0.5"/>
-  </g>
-  <g transform="translate(150 60)">
-    <rect x="0" y="0" width="120" height="160" rx="4" fill="url(#amber)" opacity="0.18" stroke="#ffb86b" stroke-width="2" stroke-dasharray="7 6"/>
-  </g>
-  <g transform="translate(182 52) rotate(3 60 80)">
-    <rect x="0" y="0" width="120" height="160" rx="4" fill="url(#paper)" filter="url(#glow)" opacity="0.95"/>
-    <g fill="#0c0e12" opacity="0.72">
-      <rect x="16" y="22" width="62" height="6" rx="3"/>
-      <rect x="16" y="38" width="88" height="3.5" rx="2"/>
-      <rect x="16" y="48" width="74" height="3.5" rx="2"/>
-      <rect x="16" y="58" width="82" height="3.5" rx="2"/>
-      <rect x="16" y="82" width="88" height="3.5" rx="2"/>
-      <rect x="16" y="92" width="66" height="3.5" rx="2"/>
-      <rect x="16" y="112" width="52" height="3.5" rx="2"/>
-      <rect x="16" y="122" width="78" height="3.5" rx="2"/>
-      <rect x="16" y="132" width="44" height="3.5" rx="2"/>
+  
+  <g transform="translate(78 46) scale(0.42)">
+    <circle cx="256" cy="256" r="240" fill="url(#glow)"/>
+    <polygon points="192.4,186.3 303.7,174.6 319.6,325.7 208.3,337.4" fill="url(#paper)"/>
+    <g fill="none" stroke="url(#amber)" stroke-width="27" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M 215 163 L 163 163 L 163 215"/><path d="M 297 163 L 349 163 L 349 215"/><path d="M 297 349 L 349 349 L 349 297"/><path d="M 215 349 L 163 349 L 163 297"/>
     </g>
   </g>
 
-  <text x="360" y="150" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="72" font-weight="650" fill="#eef1f6" letter-spacing="-2">Scano</text>
-  <text x="363" y="192" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="23" fill="#939aa7">photos in, clean scanned PDF out — entirely in your browser</text>
-  <g font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="16" fill="#ffb86b">
-    <rect x="362" y="216" width="132" height="30" rx="15" fill="#ffb86b" opacity="0.10" stroke="#ffb86b" stroke-opacity="0.35"/>
-    <text x="378" y="236" fill="#ffb86b">100% local</text>
-    <rect x="504" y="216" width="150" height="30" rx="15" fill="#ffffff" opacity="0.05" stroke="#ffffff" stroke-opacity="0.12"/>
-    <text x="520" y="236" fill="#c9d0db">no account</text>
-    <rect x="664" y="216" width="128" height="30" rx="15" fill="#ffffff" opacity="0.05" stroke="#ffffff" stroke-opacity="0.12"/>
-    <text x="680" y="236" fill="#c9d0db">no upload</text>
+  <text x="384" y="152" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif"
+        font-size="84" font-weight="700" fill="#f2f4f8" letter-spacing="-2.5">Scano</text>
+  <text x="388" y="200" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif"
+        font-size="25" fill="#9aa1ab">photos in, clean scanned PDF out — entirely in your browser</text>
+
+  <g font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="17">
+    <rect x="388" y="228" width="146" height="34" rx="17" fill="#ffc061" opacity="0.10" stroke="#ffc061" stroke-opacity="0.35"/>
+    <text x="406" y="251" fill="#ffc061" font-weight="600">100% local</text>
+    <rect x="546" y="228" width="150" height="34" rx="17" fill="#ffffff" opacity="0.05" stroke="#ffffff" stroke-opacity="0.12"/>
+    <text x="564" y="251" fill="#c9d0db">no account</text>
+    <rect x="708" y="228" width="142" height="34" rx="17" fill="#ffffff" opacity="0.05" stroke="#ffffff" stroke-opacity="0.12"/>
+    <text x="726" y="251" fill="#c9d0db">no upload</text>
+    <rect x="862" y="228" width="150" height="34" rx="17" fill="#ffffff" opacity="0.05" stroke="#ffffff" stroke-opacity="0.12"/>
+    <text x="880" y="251" fill="#c9d0db">works offline</text>
   </g>
 </svg>
