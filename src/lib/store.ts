@@ -75,7 +75,7 @@ export function autoDetect(page: Page): boolean {
 
 function safeDetect(img: ImageData): Quad | null {
   try {
-    return detectPageQuad(img);
+    return detectPageQuad(img, { effort: "thorough" });
   } catch (err) {
     console.warn("[flatbed] detection failed", err);
     return null;

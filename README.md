@@ -32,11 +32,11 @@ Both images come from the demo photo that ships with the app.
 
 ## What it does
 
-- **Live detection in the viewfinder.** A worker finds the sheet ~3×/second and
-  the outline eases into place. Nothing to tap if it already looks right.
-- **You choose the crop, every shot.** After the shutter you pick *Detect
-  automatically* or *Crop manually* — nothing is processed until you decide.
-  Auto-detection is a suggestion, never a decision made behind your back.
+- **Optional live detection.** The *Detect* toggle is off by default; switched on,
+  a worker finds the sheet ~2-3×/second and the outline eases into place.
+- **The shutter is never a surprise.** If the viewfinder is already framing a
+  sheet, that crop is used without asking. If it is not, flatbed asks: crop by
+  hand, detect this photo, or keep the whole frame.
 - **Manual framing that actually lands.** Drag any corner with a magnifier loupe
   (it shows exactly the pixel under your finger), or drag the whole sheet. Every
   release re-renders the page. The crop button switches back and forth.
@@ -56,20 +56,25 @@ always gets the whole screen.
 
 ## How the detection works
 
-No ML model and no WASM download — about 800 lines of TypeScript in
-[`src/lib/cv.ts`](src/lib/cv.ts):
+No ML model and no WASM download — plain TypeScript in
+[`src/lib/cv.ts`](src/lib/cv.ts). Three candidate sources feed one ranked list:
 
-1. **Paperness mask** — bright, low chroma, and red not far above blue. That
-   last term is what keeps a warm wooden desk out of the mask.
-2. **Morphological closing** — printed text punches holes into a sheet; without
-   closing, a page is never one connected blob.
-3. **Component scoring** — each blob is scored by how completely its
-   minimum-area rectangle is filled. A page scores ~0.9, a bright desk patch
-   does not.
-4. **Edge snapping** — every side is slid *and* tilted while measuring edge
-   strength plus polarity (paper brighter than the desk). Lines keep the coarse
-   orientation, so corners stay sane when an edge is partly occluded.
-5. **Homography warp**, then a Sauvola threshold for the output.
+1. **Paperness masks at several thresholds** — bright, low chroma, red not far
+   above blue. The warmth term keeps a wooden desk out; high percentiles of the
+   luma histogram find a white sheet on a pale desk where Otsu fails. Printed
+   text is closed away morphologically.
+2. **Blob scoring** — each blob's minimum-area rectangle is scored on *fill*
+   (does the rectangle actually match the blob?), *contrast* (is the inside
+   brighter **or** less colourful than the outside?), *edge sharpness* and size.
+3. **Edge snap from the frame** — for paper a colour mask cannot separate
+   (white on white), four seed frames let each side slide onto the strongest
+   paper-over-desk edge. Gates on movement, gradient and paper evidence keep an
+   empty desk from being reported as a document.
+
+The winner is then snapped precisely, and the result is warped with a
+homography and thresholded with Sauvola. Colour is used throughout: a pale
+wooden desk can match paper in brightness while being obviously different in
+hue, which is exactly where a luma-only detector fails.
 
 ## Run it
 
@@ -87,12 +92,14 @@ If the browser blocks camera access (or you are on desktop), the app offers
 ```bash
 npm run typecheck  # vue-tsc, strict
 npm run test:cv    # real CV pipeline on the demo photo, with assertions
-npm test           # UI flows in jsdom, loupe/fit maths, PDF page geometry
+npm test           # UI flows, detection on synthetic scenes, loupe maths, PDF geometry
 ```
 
 `test:cv` is the honest one: it detects the page in `public/samples/letter.jpg`,
 checks the corners against hand-measured coordinates, and fails the build if the
-detector drifts. `tests/pdf.test.ts` covers the placement maths, because getting
+detector drifts. `tests/detect.test.ts` renders synthetic desks — dark, warm,
+low-contrast, empty — and asserts both the found corners and the *refusal* to
+find a page where there is none. `tests/pdf.test.ts` covers the placement maths, because getting
 that wrong prints cropped documents, and `tests/geometry.test.ts` pins the
 canvas → image mapping that the magnifier depends on.
 

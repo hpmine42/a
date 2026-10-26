@@ -37,12 +37,14 @@ async function savePdf() {
 <template>
   <div class="pages">
     <header class="pages-top">
-      <button class="round" aria-label="Back" @click="emit('back')">
-        <Icon name="back" :size="22" />
+      <button class="control" aria-label="Back to camera" @click="emit('back')">
+        <Icon name="back" :size="19" />
+        <span>Camera</span>
       </button>
       <span class="pages-count">{{ label }}</span>
-      <button class="round" aria-label="Delete all pages" @click="clearPages()">
-        <Icon name="trash" :size="19" />
+      <button class="control danger" aria-label="Delete all pages" @click="clearPages()">
+        <Icon name="trash" :size="18" />
+        <span>Clear</span>
       </button>
     </header>
 

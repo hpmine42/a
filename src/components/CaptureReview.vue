@@ -8,6 +8,7 @@ const props = defineProps<{ src: ImageData; pageCount: number }>();
 const emit = defineEmits<{
   (e: "auto"): void;
   (e: "manual"): void;
+  (e: "whole"): void;
   (e: "retake"): void;
 }>();
 
@@ -35,7 +36,7 @@ function draw() {
   ctx.clearRect(0, 0, rect.width, rect.height);
   ctx.imageSmoothingQuality = "high";
 
-  const pad = 14;
+  const pad = 12;
   const fit = containFit(props.src.width, props.src.height, rect.width - pad * 2, rect.height - pad * 2);
   ctx.drawImage(
     canvasFor(props.src),
@@ -58,10 +59,11 @@ watch(() => props.src, draw);
 <template>
   <div class="review">
     <header class="review-top">
-      <button class="round" aria-label="Discard photo" @click="emit('retake')">
-        <Icon name="close" :size="22" />
+      <button class="control" aria-label="Discard photo and go back" @click="emit('retake')">
+        <Icon name="close" :size="19" />
+        <span>Discard</span>
       </button>
-      <span class="review-count">{{ pageCount > 0 ? `${pageCount} scanned` : "New scan" }}</span>
+      <span class="review-count">{{ props.pageCount > 0 ? `${props.pageCount} scanned` : "New scan" }}</span>
       <span class="review-spacer" />
     </header>
 
@@ -70,21 +72,32 @@ watch(() => props.src, draw);
     </div>
 
     <div class="review-sheet">
-      <p class="review-title">How should the page be cropped?</p>
+      <p class="review-title">
+        <strong>No page detected</strong>
+        <span>How should this photo be cropped?</span>
+      </p>
 
-      <button class="choice primary" @click="emit('auto')">
-        <span class="choice-icon"><Icon name="auto" :size="22" /></span>
+      <button class="choice primary" @click="emit('manual')">
+        <span class="choice-icon"><Icon name="crop" :size="22" /></span>
         <span class="choice-text">
-          <strong>Detect automatically</strong>
-          <small>Find the paper and straighten it</small>
+          <strong>Crop by hand</strong>
+          <small>Place the four corners yourself</small>
         </span>
       </button>
 
-      <button class="choice" @click="emit('manual')">
-        <span class="choice-icon"><Icon name="crop" :size="22" /></span>
+      <button class="choice" @click="emit('auto')">
+        <span class="choice-icon"><Icon name="auto" :size="22" /></span>
         <span class="choice-text">
-          <strong>Crop manually</strong>
-          <small>Place the four corners yourself</small>
+          <strong>Detect the page</strong>
+          <small>Let flatbed search this photo once</small>
+        </span>
+      </button>
+
+      <button class="choice" @click="emit('whole')">
+        <span class="choice-icon"><Icon name="image" :size="22" /></span>
+        <span class="choice-text">
+          <strong>Use the whole photo</strong>
+          <small>No crop, no straightening</small>
         </span>
       </button>
     </div>

@@ -100,6 +100,19 @@ function otsu(g: Float32Array): number {
 export type Quad = [Pt, Pt, Pt, Pt]; // TL, TR, BR, BL
 
 /** Separable grayscale morphology on a 0/1 mask. */
+/** Luma percentile, for thresholds that survive a mostly-white scene. */
+function percentile(g: Float32Array, p: number): number {
+  const hist = new Uint32Array(256);
+  for (let i = 0; i < g.length; i++) hist[clamp(Math.round(g[i]), 0, 255)]++;
+  const target = g.length * p;
+  let acc = 0;
+  for (let v = 0; v < 256; v++) {
+    acc += hist[v];
+    if (acc >= target) return v;
+  }
+  return 255;
+}
+
 function morphPass(src: Uint8Array, w: number, h: number, r: number, mode: "max" | "min"): Uint8Array {
   const tmp = new Uint8Array(w * h);
   const out = new Uint8Array(w * h);
@@ -212,55 +225,183 @@ function orderQuad(quad: Quad): Quad {
   return (cross >= 0 ? out : [out[0], out[3], out[2], out[1]]) as Quad;
 }
 
-/**
- * Find the sheet of paper and return its four corners.
- *
- * Paper is bright *and* nearly neutral in colour, which is what separates it
- * from a wooden desk, a hand, or a dark table — the usual failure modes of a
- * naive brightness threshold.
- */
-export function detectPageQuad(img: ImageData): Quad | null {
-  const { g, w, h } = downscaleG(img, 480);
-  const n = w * h;
+export type DetectEffort = "fast" | "thorough";
+export type DetectOptions = {
+  /** `fast` is for the live viewfinder, `thorough` for the actual capture. */
+  effort?: DetectEffort;
+};
 
-  // paperness map: bright, low-chroma, and with red barely above blue. That
-  // last term is what keeps warm wood and warm highlights out of the mask.
-  const chroma = new Float32Array(n);
-  const warmth = new Float32Array(n);
-  {
-    const sx = img.width / w;
-    const sy = img.height / h;
-    const d = img.data;
-    for (let y = 0; y < h; y++) {
-      const yy = Math.min(img.height - 1, Math.floor(y * sy));
-      for (let x = 0; x < w; x++) {
-        const xx = Math.min(img.width - 1, Math.floor(x * sx));
-        const i = (yy * img.width + xx) * 4;
-        const r = d[i];
-        const gg = d[i + 1];
-        const b = d[i + 2];
-        chroma[y * w + x] = Math.max(r, gg, b) - Math.min(r, gg, b);
-        warmth[y * w + x] = r - b;
+type Candidate = {
+  quad: Quad;
+  /** How much of the quad's rectangle the blob actually fills (0..1). */
+  fill: number;
+  /** Share of the image covered by the quad. */
+  area: number;
+  source: "mask" | "edges";
+};
+
+/* ----------------------------------------------------------------- scoring */
+
+function quadArea(quad: Quad): number {
+  let sum = 0;
+  for (let i = 0; i < 4; i++) {
+    const a = quad[i];
+    const b = quad[(i + 1) % 4];
+    sum += a.x * b.y - b.x * a.y;
+  }
+  return Math.abs(sum) / 2;
+}
+
+/** Scale a quad around its centroid. */
+function scaleQuad(quad: Quad, factor: number): Quad {
+  const cx = quad.reduce((sum, p) => sum + p.x, 0) / 4;
+  const cy = quad.reduce((sum, p) => sum + p.y, 0) / 4;
+  return quad.map((p) => ({
+    x: cx + (p.x - cx) * factor,
+    y: cy + (p.y - cy) * factor,
+  })) as Quad;
+}
+
+/**
+ * What the region inside the quad looks like compared to what is around it.
+ *
+ * Measured on a shrunken and an expanded copy of the quad, not on the edge
+ * itself: a coarse candidate is often a few percent too large, and sampling
+ * right at the border then compares desk with desk and rejects a perfectly
+ * good page.
+ */
+function quadMetrics(
+  quad: Quad,
+  g: Float32Array,
+  chroma: Float32Array,
+  grad: Float32Array,
+  w: number,
+  h: number
+): { inner: number; outer: number; innerChroma: number; outerChroma: number; edge: number } {
+  const innerQuad = scaleQuad(quad, 0.82);
+  const outerQuad = scaleQuad(quad, 1.14);
+  const samples = 14;
+
+  const lineMean = (q: Quad, buf: Float32Array) => {
+    let sum = 0;
+    let used = 0;
+    for (let i = 0; i < 4; i++) {
+      const a = q[i];
+      const b = q[(i + 1) % 4];
+      for (let k = 1; k < samples; k++) {
+        const t = 0.12 + (0.76 * k) / (samples - 1);
+        const x = a.x + (b.x - a.x) * t;
+        const y = a.y + (b.y - a.y) * t;
+        if (x < 0 || y < 0 || x >= w || y >= h) continue;
+        sum += sampleBilinear(buf, w, h, x, y);
+        used++;
       }
+    }
+    return used ? sum / used : 0;
+  };
+
+  // The coarse quad is usually a few pixels off the true edge (the mask is
+  // dilated before hulling), so look for the gradient peak in a small band
+  // instead of sampling exactly on the line.
+  let edge = 0;
+  let used = 0;
+  for (let i = 0; i < 4; i++) {
+    const a = quad[i];
+    const b = quad[(i + 1) % 4];
+    const len = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+    const nx = -(b.y - a.y) / len;
+    const ny = (b.x - a.x) / len;
+    for (let k = 1; k < samples; k++) {
+      const t = 0.1 + (0.8 * k) / (samples - 1);
+      const px = a.x + (b.x - a.x) * t;
+      const py = a.y + (b.y - a.y) * t;
+      let peak = 0;
+      for (let o = -8; o <= 8; o++) {
+        const x = px + nx * o;
+        const y = py + ny * o;
+        if (x < 0 || y < 0 || x >= w || y >= h) continue;
+        const v = sampleBilinear(grad, w, h, x, y);
+        if (v > peak) peak = v;
+      }
+      edge += peak;
+      used++;
     }
   }
 
-  const thr = Math.max(otsu(g) * 0.96, 105);
-  const mask = new Uint8Array(n);
-  for (let i = 0; i < n; i++) mask[i] = g[i] > thr && chroma[i] < 60 && warmth[i] < 26 ? 1 : 0;
+  return {
+    inner: lineMean(innerQuad, g),
+    outer: lineMean(outerQuad, g),
+    innerChroma: lineMean(innerQuad, chroma),
+    outerChroma: lineMean(outerQuad, chroma),
+    edge: used ? edge / used : 0,
+  };
+}
 
-  // Morphological closing with a separable max/min filter. Print and ruled
-  // lines punch holes into the sheet; without this the page is not one blob.
-  const closed = morphClose(mask, w, h, Math.max(3, Math.round(Math.min(w, h) * 0.012)));
+type Metrics = ReturnType<typeof quadMetrics>;
 
-  // label components (4-connectivity)
+/**
+ * Combined "this is paper" evidence: the inside is brighter *or* noticeably
+ * less colourful than the surroundings. Luma alone fails on a pale wooden desk,
+ * which can match paper in brightness while being far warmer.
+ */
+function paperEvidence(m: Metrics): number {
+  return m.inner - m.outer + 0.8 * (m.outerChroma - m.innerChroma);
+}
+
+/**
+ * One number per candidate. Weighted for what actually goes wrong: a badly
+ * filled rectangle (desk merged with paper) is worse than a slightly loose
+ * one, and a quad with no paper evidence is not a sheet at all.
+ */
+function scoreCandidate(
+  candidate: Candidate,
+  g: Float32Array,
+  chroma: Float32Array,
+  grad: Float32Array,
+  w: number,
+  h: number
+): number {
+  const m = quadMetrics(candidate.quad, g, chroma, grad, w, h);
+  if (candidate.fill < 0.6) return -1;
+
+  // there must be real evidence that this is paper, unless the sheet fills the
+  // frame so completely that there is nothing left to compare against
+  const evidence = paperEvidence(m);
+  if (evidence < 8 && candidate.area < 0.94) return -1;
+  if (m.edge < 12 && candidate.area < 0.94) return -1;
+
+  const contrast = clamp(evidence / 55, 0, 1);
+  const sharpness = clamp(m.edge / 85, 0, 1);
+  const fill = clamp((candidate.fill - 0.5) / 0.45, 0, 1);
+  const area = clamp(candidate.area / 0.45, 0, 1);
+
+  return 0.42 * fill + 0.3 * contrast + 0.2 * sharpness + 0.08 * area;
+}
+
+/* ------------------------------------------------------------- candidates */
+
+/** Plausibility gate shared by every source. */
+function plausible(quad: Quad, w: number, h: number): boolean {
+  const d = (a: Pt, b: Pt) => Math.hypot(a.x - b.x, a.y - b.y);
+  const sides = [0, 1, 2, 3].map((i) => d(quad[i], quad[(i + 1) % 4]));
+  const minSide = Math.min(...sides);
+  const maxSide = Math.max(...sides);
+  if (minSide < Math.min(w, h) * 0.14) return false;
+  const aspect = maxSide / Math.max(1, minSide);
+  if (aspect > 3.2 || aspect < 0.32) return false;
+  const area = quadArea(quad) / (w * h);
+  return area > 0.05 && area < 0.995;
+}
+
+/** Connected bright, colour-neutral blobs → minimum-area rectangles. */
+function maskCandidates(mask: Uint8Array, w: number, h: number, out: Candidate[]): void {
+  const n = w * h;
   const seen = new Uint8Array(n);
   const stack: number[] = [];
   const minArea = n * 0.04;
-  const candidates: { pts: number[]; area: number }[] = [];
 
   for (let start = 0; start < n; start++) {
-    if (!closed[start] || seen[start]) continue;
+    if (!mask[start] || seen[start]) continue;
     stack.length = 0;
     stack.push(start);
     seen[start] = 1;
@@ -270,78 +411,227 @@ export function detectPageQuad(img: ImageData): Quad | null {
       pts.push(p);
       const x = p % w;
       const y = (p - x) / w;
-      if (x > 0 && closed[p - 1] && !seen[p - 1]) { seen[p - 1] = 1; stack.push(p - 1); }
-      if (x < w - 1 && closed[p + 1] && !seen[p + 1]) { seen[p + 1] = 1; stack.push(p + 1); }
-      if (y > 0 && closed[p - w] && !seen[p - w]) { seen[p - w] = 1; stack.push(p - w); }
-      if (y < h - 1 && closed[p + w] && !seen[p + w]) { seen[p + w] = 1; stack.push(p + w); }
+      if (x > 0 && mask[p - 1] && !seen[p - 1]) {
+        seen[p - 1] = 1;
+        stack.push(p - 1);
+      }
+      if (x < w - 1 && mask[p + 1] && !seen[p + 1]) {
+        seen[p + 1] = 1;
+        stack.push(p + 1);
+      }
+      if (y > 0 && mask[p - w] && !seen[p - w]) {
+        seen[p - w] = 1;
+        stack.push(p - w);
+      }
+      if (y < h - 1 && mask[p + w] && !seen[p + w]) {
+        seen[p + w] = 1;
+        stack.push(p + w);
+      }
     }
-    if (pts.length >= minArea) candidates.push({ pts, area: pts.length });
-  }
-  if (!candidates.length) return null;
+    if (pts.length < minArea) continue;
 
-  // A sheet of paper is a rectangle seen at an angle: score candidates by how
-  // completely their minimum-area rectangle is filled. Bright desk patches and
-  // merged blobs score badly, a clean page scores ~0.9 and up.
-  let bestQuad: Quad | null = null;
-  let bestScore = 0;
-  const inv = img.width / w;
-
-  for (const cand of candidates) {
-    const step = Math.max(1, Math.floor(cand.pts.length / 5000));
+    const step = Math.max(1, Math.floor(pts.length / 5000));
     const cloud: Pt[] = [];
-    for (let i = 0; i < cand.pts.length; i += step) {
-      const p = cand.pts[i];
+    for (let i = 0; i < pts.length; i += step) {
+      const p = pts[i];
       const x = p % w;
       cloud.push({ x, y: (p - x) / w });
     }
     const rect = minAreaRect(convexHull(cloud));
     if (!rect) continue;
+    const rectArea = quadArea(rect as Quad);
+    if (rectArea < 1) continue;
+    const quad = orderQuad(rect);
+    if (!plausible(quad, w, h)) continue;
+    out.push({ quad, fill: pts.length / rectArea, area: quadArea(quad) / n, source: "mask" });
+  }
+}
 
-    const area = Math.abs(
-      (rect[1].x - rect[0].x) * (rect[1].y + rect[0].y) / 2 +
-        (rect[2].x - rect[1].x) * (rect[2].y + rect[1].y) / 2 +
-        (rect[3].x - rect[2].x) * (rect[3].y + rect[2].y) / 2 +
-        (rect[0].x - rect[3].x) * (rect[0].y + rect[3].y) / 2
-    );
-    if (area < 1) continue;
+/**
+ * Fallback for sheets the colour mask cannot separate (white paper on a white
+ * desk, a screen, paper under glass): start from a frame and let each side
+ * slide onto the strongest bright-over-dark edge.
+ */
+/** Share of a quad's boundary that sits on a real gradient. */
+function edgeCoverage(quad: Quad, grad: Float32Array, w: number, h: number): number {
+  let strong = 0;
+  let total = 0;
+  for (let i = 0; i < 4; i++) {
+    const a = quad[i];
+    const b = quad[(i + 1) % 4];
+    for (let k = 1; k < 16; k++) {
+      const t = k / 16;
+      const x = a.x + (b.x - a.x) * t;
+      const y = a.y + (b.y - a.y) * t;
+      if (x < 0 || y < 0 || x >= w || y >= h) continue;
+      if (sampleBilinear(grad, w, h, x, y) > 14) strong++;
+      total++;
+    }
+  }
+  return total ? strong / total : 0;
+}
 
-    const fill = cand.area / area;
-    const d = (a: Pt, b: Pt) => Math.hypot(a.x - b.x, a.y - b.y);
-    const long = Math.max(d(rect[0], rect[1]), d(rect[1], rect[2]));
-    const short = Math.min(d(rect[0], rect[1]), d(rect[1], rect[2]));
-    const aspect = long / short;
-    if (aspect < 0.45 || aspect > 2.4) continue;
-    if (short < Math.min(w, h) * 0.2) continue;
+function edgeCandidates(
+  g: Float32Array,
+  chroma: Float32Array,
+  grad: Float32Array,
+  w: number,
+  h: number,
+  out: Candidate[]
+): void {
+  // Several starting frames, because each side only searches locally: a seed
+  // that already hugs the page finds the edge, one that is far away cannot.
+  const seeds = [0.02, 0.1, 0.2, 0.3].map((inset) => fullFrameQuad(w, h, inset));
+  let best: Quad | null = null;
+  let bestScore = -Infinity;
 
-    // prefer well-filled rectangles; break ties with bigger area
-    const score = fill + Math.min(cand.area / n, 0.5) * 0.2;
-    if (fill > 0.72 && score > bestScore) {
+  for (const seed of seeds) {
+    let candidate = refineQuadByEdges(seed, g, grad, w, h, Math.min(w, h) * 0.3);
+    candidate = refineQuadByEdges(candidate, g, grad, w, h, Math.min(w, h) * 0.06);
+    if (!plausible(candidate, w, h)) continue;
+
+    // A snap that barely moved is just "the whole photo", and a scene with no
+    // page at all produces exactly that. Without these gates an empty desk
+    // would be reported as a document.
+    const moved =
+      candidate.reduce((sum, p, i) => sum + Math.hypot(p.x - seed[i].x, p.y - seed[i].y), 0) / 4;
+    if (moved < Math.min(w, h) * 0.015) continue;
+
+    const m = quadMetrics(candidate, g, chroma, grad, w, h);
+    if (m.edge < 16 || paperEvidence(m) < 8) continue;
+
+    const area = quadArea(candidate) / (w * h);
+    if (area < 0.15 || area > 0.98) continue;
+
+    const coverage = edgeCoverage(candidate, grad, w, h);
+    if (coverage < 0.45) continue;
+
+    const score = paperEvidence(m) + m.edge + coverage * 40;
+    if (score > bestScore) {
       bestScore = score;
-      bestQuad = rect;
+      best = candidate;
     }
   }
 
-  if (!bestQuad) return null;
-  // the closing step grows the mask by a pixel or two, so pull the frame back in
-  // slightly: better a hair of white margin than a dark edge baked into the scan
-  const cx = bestQuad.reduce((s, p) => s + p.x, 0) / 4;
-  const cy = bestQuad.reduce((s, p) => s + p.y, 0) / 4;
-  const inset = 0.994;
-  const tightened = bestQuad.map((p) => ({
-    x: cx + (p.x - cx) * inset,
-    y: cy + (p.y - cy) * inset,
-  }));
-  const coarse = orderQuad(tightened as Quad);
+  if (!best) return;
+  out.push({
+    quad: best,
+    fill: edgeCoverage(best, grad, w, h),
+    area: quadArea(best) / (w * h),
+    source: "edges",
+  });
+}
 
-  // second pass: snap the four sides onto the actual paper boundary
-  const grad = sobelMagnitude(g, w, h);
-  const window = Math.max(6, Math.min(w, h) * 0.05);
-  let refined: Quad = coarse;
-  for (let pass = 0; pass < 3; pass++) {
-    refined = refineQuadByEdges(refined, g, grad, w, h, window);
+/* ------------------------------------------------------------------ entry */
+
+/**
+ * Find the sheet of paper and return its four corners.
+ *
+ * Three sources feed one ranked list of candidates:
+ *   1. connected colour-neutral blobs at several thresholds (the reliable one),
+ *   2. a lower threshold, which rescues shadowed paper,
+ *   3. an edge snap from the frame, which rescues white-on-white scenes.
+ * Every candidate is scored on fill, contrast (paper brighter than the desk),
+ * edge sharpness and size; only the winner is then snapped precisely.
+ */
+export function detectPageQuad(img: ImageData, options: DetectOptions = {}): Quad | null {
+  const thorough = (options.effort ?? "thorough") === "thorough";
+  const planes = downscalePlanes(img, thorough ? 480 : 360);
+  const { w, h } = planes;
+  const n = w * h;
+  const g = new Float32Array(n);
+  const chroma = new Float32Array(n);
+  const warmth = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const r = planes.r[i];
+    const gg = planes.g[i];
+    const b = planes.b[i];
+    g[i] = 0.299 * r + 0.587 * gg + 0.114 * b;
+    chroma[i] = Math.max(r, gg, b) - Math.min(r, gg, b);
+    warmth[i] = r - b;
   }
 
-  // keep the paper edge itself out of the crop: a hair of white margin reads as
+  // One field that behaves like "how much does this look like paper": bright
+  // and colour-neutral scores high, a warm desk scores lower even when it is
+  // just as bright. Used for edge polarity, where luma alone is blind.
+  const paperness = new Float32Array(n);
+  for (let i = 0; i < n; i++) paperness[i] = g[i] - 0.8 * chroma[i];
+
+  const grad = colourGradient(planes);
+  const base = otsu(g);
+  // Otsu splits ink from paper, which is useless when the desk is as bright as
+  // the paper. High percentiles isolate "the brightest surface" instead, so a
+  // white sheet on a pale desk is still found.
+  const raw = thorough
+    ? [base * 0.9, base * 1.0, percentile(g, 0.8), percentile(g, 0.93)]
+    : [base * 0.9, percentile(g, 0.8)];
+  const thresholds: number[] = [];
+  for (const t of raw) {
+    const v = clamp(t, 95, 245);
+    if (thresholds.every((existing) => Math.abs(existing - v) > 6)) thresholds.push(v);
+  }
+
+  const candidates: Candidate[] = [];
+  const radius = Math.max(3, Math.round(Math.min(w, h) * 0.012));
+  const seenKeys = new Set<string>();
+
+  for (const t of thresholds) {
+    const thr = Math.max(90, Math.min(235, t));
+    const mask = new Uint8Array(n);
+    for (let i = 0; i < n; i++) {
+      mask[i] = g[i] > thr && chroma[i] < 62 && warmth[i] < 30 ? 1 : 0;
+    }
+    const closed = morphClose(mask, w, h, radius);
+    const found: Candidate[] = [];
+    maskCandidates(closed, w, h, found);
+    if ((globalThis as { __dbgDetect?: boolean }).__dbgDetect) {
+      let on = 0;
+      for (let i = 0; i < n; i++) on += closed[i];
+      console.log(" thr", thr.toFixed(0), "share", (on / n).toFixed(2), "cands", found.length,
+        found.map((c) => {
+          const mm = quadMetrics(c.quad, g, chroma, grad, w, h);
+          return `fill=${c.fill.toFixed(2)} ev=${paperEvidence(mm).toFixed(0)} edge=${mm.edge.toFixed(0)} sc=${scoreCandidate(c, g, chroma, grad, w, h).toFixed(2)}`;
+        }).join(" | "));
+    }
+    // the same sheet shows up at several thresholds: keep it once
+    let added = 0;
+    for (const c of found) {
+      const key = c.quad.map((p) => `${Math.round(p.x / 10)},${Math.round(p.y / 10)}`).join("|");
+      if (seenKeys.has(key)) continue;
+      seenKeys.add(key);
+      candidates.push(c);
+      added++;
+    }
+    // a confident hit at the first threshold makes the rest redundant
+    if (added > 0 && scoreCandidate(found[0], g, chroma, grad, w, h) > 0.7) break;
+  }
+
+  // the frame snap is the rescue path for white-on-white, so it only runs when
+  // the colour masks found nothing worth keeping
+  if (!candidates.length && thorough) edgeCandidates(paperness, chroma, grad, w, h, candidates);
+  if (!candidates.length) return null;
+
+  let best: Candidate | null = null;
+  let bestScore = 0;
+  for (const c of candidates) {
+    const score = scoreCandidate(c, g, chroma, grad, w, h);
+    if (score > bestScore) {
+      bestScore = score;
+      best = c;
+    }
+  }
+  if (!best || bestScore <= 0) return null;
+
+  // precise pass on the winner only: cheap, and keeps false positives out
+  let refined = best.quad;
+  const window = Math.max(6, Math.min(w, h) * 0.05);
+  for (let pass = 0; pass < 3; pass++) {
+    refined = refineQuadByEdges(refined, paperness, grad, w, h, window);
+  }
+  // the snap may move a corner a little, but never into nonsense
+  if (!plausible(refined, w, h)) refined = best.quad;
+
+  // keep the paper edge out of the crop: a hair of white margin reads as
   // "scanned", a dark 1px rim reads as "photo"
   const fx = refined.reduce((sum, p) => sum + p.x, 0) / 4;
   const fy = refined.reduce((sum, p) => sum + p.y, 0) / 4;
@@ -351,25 +641,78 @@ export function detectPageQuad(img: ImageData): Quad | null {
     y: fy + (p.y - fy) * shrink,
   })) as Quad;
 
+  const inv = img.width / w;
   return orderQuad(trimmed.map((p) => ({ x: p.x * inv, y: p.y * inv })) as Quad);
 }
 
-function sobelMagnitude(g: Float32Array, w: number, h: number): Float32Array {
+type Planes = { r: Float32Array; g: Float32Array; b: Float32Array; w: number; h: number };
+
+/** Downscale the three colour planes; detection needs more than luma. */
+function downscalePlanes(img: ImageData, maxSide: number): Planes {
+  const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+  const w = Math.max(8, Math.round(img.width * scale));
+  const h = Math.max(8, Math.round(img.height * scale));
+  const r = new Float32Array(w * h);
+  const g = new Float32Array(w * h);
+  const b = new Float32Array(w * h);
+  const sx = img.width / w;
+  const sy = img.height / h;
+  const d = img.data;
+  for (let y = 0; y < h; y++) {
+    const y0 = Math.floor(y * sy);
+    const y1 = Math.min(img.height, Math.max(y0 + 1, Math.floor((y + 1) * sy)));
+    for (let x = 0; x < w; x++) {
+      const x0 = Math.floor(x * sx);
+      const x1 = Math.min(img.width, Math.max(x0 + 1, Math.floor((x + 1) * sx)));
+      let ar = 0;
+      let ag = 0;
+      let ab = 0;
+      let n = 0;
+      for (let yy = y0; yy < y1; yy++) {
+        const base = yy * img.width;
+        for (let xx = x0; xx < x1; xx++) {
+          const i = (base + xx) * 4;
+          ar += d[i];
+          ag += d[i + 1];
+          ab += d[i + 2];
+          n++;
+        }
+      }
+      const i = y * w + x;
+      r[i] = ar / n;
+      g[i] = ag / n;
+      b[i] = ab / n;
+    }
+  }
+  return { r, g, b, w, h };
+}
+
+/**
+ * Edge strength across all three channels. Paper on a pale wooden desk can have
+ * the same brightness as the desk and still be an obvious edge in colour, which
+ * a luma-only Sobel misses completely.
+ */
+function colourGradient(p: Planes): Float32Array {
+  const { r, g, b, w, h } = p;
   const out = new Float32Array(w * h);
+  const sobel = (buf: Float32Array, x: number, y: number) => {
+    const i = y * w + x;
+    const tl = buf[i - w - 1];
+    const tc = buf[i - w];
+    const tr = buf[i - w + 1];
+    const ml = buf[i - 1];
+    const mr = buf[i + 1];
+    const bl = buf[i + w - 1];
+    const bc = buf[i + w];
+    const br = buf[i + w + 1];
+    const gx = tr + 2 * mr + br - (tl + 2 * ml + bl);
+    const gy = bl + 2 * bc + br - (tl + 2 * tc + tr);
+    return Math.hypot(gx, gy) / 4;
+  };
   for (let y = 1; y < h - 1; y++) {
     for (let x = 1; x < w - 1; x++) {
       const i = y * w + x;
-      const tl = g[i - w - 1];
-      const tc = g[i - w];
-      const tr = g[i - w + 1];
-      const ml = g[i - 1];
-      const mr = g[i + 1];
-      const bl = g[i + w - 1];
-      const bc = g[i + w];
-      const br = g[i + w + 1];
-      const gx = tr + 2 * mr + br - (tl + 2 * ml + bl);
-      const gy = bl + 2 * bc + br - (tl + 2 * tc + tr);
-      out[i] = Math.hypot(gx, gy) / 4;
+      out[i] = Math.max(sobel(r, x, y), sobel(g, x, y), sobel(b, x, y));
     }
   }
   return out;

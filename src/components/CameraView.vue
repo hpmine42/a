@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import Icon from "./Icon.vue";
 import type { Pt, Quad } from "../lib/cv";
-import { imageDataFromFile, bitmapToImageData } from "../lib/image";
+import { bitmapToImageData, imageDataFromFile } from "../lib/image";
 
 const props = defineProps<{ thumbs: string[]; pageCount: number }>();
 const emit = defineEmits<{
-  (e: "captured", img: ImageData): void;
+  (e: "captured", payload: { img: ImageData; quad: Quad | null }): void;
   (e: "open-pages"): void;
 }>();
 
@@ -16,7 +16,8 @@ const overlay = ref<HTMLCanvasElement | null>(null);
 const fileInput = ref<HTMLInputElement | null>(null);
 const error = ref<"denied" | "missing" | null>(null);
 const ready = ref(false);
-const autoOn = ref(true);
+/** Detection is opt-in: it costs battery and can be distracting. */
+const autoOn = ref(false);
 const torchOn = ref(false);
 const torchAvailable = ref(false);
 const facing = ref<"environment" | "user">("environment");
@@ -32,11 +33,10 @@ let disposed = false;
 const small = document.createElement("canvas");
 const smallCtx = small.getContext("2d", { willReadFrequently: true });
 
+/** Latest detection in video pixel coordinates. */
 const target = ref<Quad | null>(null);
 const eased = ref<Quad | null>(null);
 const lastReqId = ref(0);
-
-const hasThumbs = computed(() => props.thumbs.length > 0);
 
 /* ------------------------------------------------------------------ camera */
 
@@ -63,7 +63,7 @@ async function startStream(mode: "environment" | "user") {
   try {
     await el.play();
   } catch {
-    /* autoplay can fail before the element is visible — the next frame retries */
+    /* autoplay can fail before the element is visible; the loop retries */
   }
   ready.value = true;
 
@@ -120,7 +120,8 @@ function ensureWorker() {
 function grabSmall(): { width: number; height: number; data: ImageData } | null {
   const v = video.value;
   if (!v || v.readyState < 2 || !v.videoWidth || !smallCtx) return null;
-  const scale = Math.min(1, 360 / Math.max(v.videoWidth, v.videoHeight));
+  // 320px is enough for a stable outline and keeps the worker call under 60ms
+  const scale = Math.min(1, 320 / Math.max(v.videoWidth, v.videoHeight));
   const w = Math.max(8, Math.round(v.videoWidth * scale));
   const h = Math.max(8, Math.round(v.videoHeight * scale));
   if (small.width !== w || small.height !== h) {
@@ -134,14 +135,14 @@ function grabSmall(): { width: number; height: number; data: ImageData } | null 
 function scheduleDetection(now: number) {
   if (detecting || !worker || now < nextDetectAt) return;
   if (!autoOn.value || !ready.value || document.hidden) return;
-  const small = grabSmall();
-  if (!small) return;
+  const frame = grabSmall();
+  if (!frame) return;
   detecting = true;
-  nextDetectAt = now + 380;
+  nextDetectAt = now + 420;
   const id = ++lastReqId.value;
   worker.postMessage(
-    { id, width: small.width, height: small.height, buffer: small.data.data.buffer },
-    [small.data.data.buffer]
+    { id, width: frame.width, height: frame.height, buffer: frame.data.data.buffer },
+    [frame.data.data.buffer]
   );
 }
 
@@ -184,32 +185,31 @@ function draw() {
     canvas.width = w;
     canvas.height = h;
   }
-  const ctx = canvas.getContext("2d")!;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, rect.width, rect.height);
 
   const map = coverRect();
   if (!map) return;
 
-  eased.value = ease(eased.value, target.value, 0.22);
+  eased.value = ease(eased.value, target.value, 0.24);
   const quad = eased.value;
   if (!quad || !autoOn.value) return;
 
   const pts = quad.map((p) => ({ x: p.x * map.scale + map.dx, y: p.y * map.scale + map.dy }));
-  const inset = 0.5;
 
-  // dim the surface around the sheet, very lightly: it frames without shouting
+  // frame the sheet without shouting
   ctx.save();
   ctx.beginPath();
   ctx.rect(0, 0, rect.width, rect.height);
   ctx.moveTo(pts[0].x, pts[0].y);
   for (let i = 1; i < 4; i++) ctx.lineTo(pts[i].x, pts[i].y);
   ctx.closePath();
-  ctx.fillStyle = "rgba(8, 9, 11, 0.34)";
+  ctx.fillStyle = "rgba(8, 9, 11, 0.3)";
   ctx.fill("evenodd");
   ctx.restore();
 
-  // the sheet outline
   ctx.beginPath();
   ctx.moveTo(pts[0].x, pts[0].y);
   for (let i = 1; i < 4; i++) ctx.lineTo(pts[i].x, pts[i].y);
@@ -221,21 +221,26 @@ function draw() {
   ctx.stroke();
   ctx.shadowBlur = 0;
 
-  // amber corner brackets: the app's one accent, used for the "locked on" signal
-  const bracket = Math.min(26, Math.max(14, Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y) * 0.18));
+  // amber corner brackets: the "locked on" signal
+  const side = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
+  const bracket = Math.min(30, Math.max(16, side * 0.18));
   ctx.strokeStyle = "#ffc061";
-  ctx.lineWidth = 3;
+  ctx.lineWidth = 3.5;
   ctx.lineCap = "round";
   for (let i = 0; i < 4; i++) {
     const p = pts[i];
     const prev = pts[(i + 3) % 4];
     const next = pts[(i + 1) % 4];
-    const dirA = { x: (prev.x - p.x) / (Math.hypot(prev.x - p.x, prev.y - p.y) || 1), y: (prev.y - p.y) / (Math.hypot(prev.x - p.x, prev.y - p.y) || 1) };
-    const dirB = { x: (next.x - p.x) / (Math.hypot(next.x - p.x, next.y - p.y) || 1), y: (next.y - p.y) / (Math.hypot(next.x - p.x, next.y - p.y) || 1) };
+    const norm = (q: Pt) => {
+      const len = Math.hypot(q.x - p.x, q.y - p.y) || 1;
+      return { x: (q.x - p.x) / len, y: (q.y - p.y) / len };
+    };
+    const a = norm(prev);
+    const b = norm(next);
     ctx.beginPath();
-    ctx.moveTo(p.x + dirA.x * bracket * inset, p.y + dirA.y * bracket);
+    ctx.moveTo(p.x + a.x * bracket, p.y + a.y * bracket);
     ctx.lineTo(p.x, p.y);
-    ctx.lineTo(p.x + dirB.x * bracket, p.y + dirB.y * bracket);
+    ctx.lineTo(p.x + b.x * bracket, p.y + b.y * bracket);
     ctx.stroke();
   }
 }
@@ -256,7 +261,14 @@ async function capture() {
   window.setTimeout(() => (flash.value = false), 220);
   try {
     const img = bitmapToImageData(v, 2600);
-    emit("captured", img);
+    // A visible outline means the sheet was already found: use it, do not ask.
+    const live = autoOn.value ? target.value : null;
+    let quad: Quad | null = null;
+    if (live) {
+      const scale = img.width / v.videoWidth;
+      quad = live.map((p) => ({ x: p.x * scale, y: p.y * scale })) as Quad;
+    }
+    emit("captured", { img, quad });
   } catch (err) {
     console.error("[flatbed] capture failed", err);
   }
@@ -268,7 +280,9 @@ async function useDemo() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const blob = await res.blob();
     const file = new File([blob], "demo-invoice.jpg", { type: blob.type || "image/jpeg" });
-    emit("captured", await imageDataFromFile(file, 2600));
+    const img = await imageDataFromFile(file, 2600);
+    // the demo photo has no live viewfinder, so let the detector decide
+    emit("captured", { img, quad: null });
   } catch (err) {
     console.error("[flatbed] demo photo unavailable", err);
   }
@@ -279,7 +293,7 @@ async function onFiles(event: Event) {
   const files = Array.from(input.files ?? []).filter((f) => f.type.startsWith("image/"));
   input.value = "";
   for (const file of files) {
-    emit("captured", await imageDataFromFile(file, 2600));
+    emit("captured", { img: await imageDataFromFile(file, 2600), quad: null });
   }
 }
 
@@ -305,7 +319,10 @@ onBeforeUnmount(() => {
 });
 
 watch(autoOn, (on) => {
-  if (!on) target.value = null;
+  if (!on) {
+    target.value = null;
+    eased.value = null;
+  }
 });
 </script>
 
@@ -317,28 +334,30 @@ watch(autoOn, (on) => {
       <div class="vignette" aria-hidden="true" />
 
       <div class="camera-top">
-        <div class="brand" aria-label="flatbed">
-          <span class="brand-mark" />
-        </div>
-        <div v-if="ready" class="camera-top-right">
+        <div class="brand" aria-label="flatbed"><span class="brand-mark" /></div>
+
+        <div class="camera-top-right">
           <button
-            class="round"
+            class="control"
             :class="{ on: autoOn }"
             :aria-pressed="autoOn"
-            aria-label="Automatic page detection"
+            aria-label="Detect the page while framing"
             @click="autoOn = !autoOn"
           >
-            <Icon name="auto" :size="20" />
+            <Icon name="auto" :size="19" />
+            <span>Detect</span>
           </button>
+
           <button
             v-if="torchAvailable"
-            class="round"
+            class="control"
             :class="{ on: torchOn }"
             :aria-pressed="torchOn"
             aria-label="Torch"
             @click="toggleTorch"
           >
-            <Icon :name="torchOn ? 'flash' : 'flash-off'" :size="20" />
+            <Icon :name="torchOn ? 'flash' : 'flash-off'" :size="19" />
+            <span>Light</span>
           </button>
         </div>
       </div>
@@ -351,7 +370,7 @@ watch(autoOn, (on) => {
         </template>
         <p v-else class="fallback-sub">Starting camera…</p>
         <div class="fallback-actions">
-          <button class="pill" @click="fileInput?.click()">Choose photo</button>
+          <button class="pill primary" @click="fileInput?.click()">Choose photo</button>
           <button class="pill ghost" @click="useDemo">Demo photo</button>
         </div>
       </div>
@@ -362,32 +381,36 @@ watch(autoOn, (on) => {
     </div>
 
     <div class="camera-dock">
-      <button class="dock-slot" @click="fileInput?.click()" aria-label="Choose a photo">
-        <span class="round"><Icon name="gallery" :size="21" /></span>
+      <button class="dock-action" @click="fileInput?.click()" aria-label="Choose a photo">
+        <span class="round"><Icon name="gallery" :size="22" /></span>
+        <span class="dock-label">Photos</span>
       </button>
 
-      <button class="shutter" :disabled="!ready" aria-label="Take photo" @click="capture">
+      <button class="shutter" :disabled="!ready" aria-label="Capture page" @click="capture">
         <span class="shutter-ring" />
       </button>
 
-      <button class="dock-slot" @click="flipCamera" aria-label="Flip camera">
-        <span class="round"><Icon name="flip" :size="21" /></span>
+      <button class="dock-action" @click="flipCamera" aria-label="Switch camera">
+        <span class="round"><Icon name="flip" :size="22" /></span>
+        <span class="dock-label">Flip</span>
       </button>
 
       <button
-        v-if="hasThumbs"
+        v-if="props.thumbs.length"
         class="stack"
         @click="emit('open-pages')"
-        :aria-label="`Open ${pageCount} scanned pages`"
+        :aria-label="`Open ${props.pageCount} scanned pages`"
       >
-        <img :src="thumbs[thumbs.length - 1]" alt="" />
-        <span class="stack-badge">{{ pageCount }}</span>
+        <img :src="props.thumbs[props.thumbs.length - 1]" alt="" />
+        <span class="stack-badge">{{ props.pageCount }}</span>
       </button>
     </div>
 
     <p class="camera-hint">
       <span class="live-dot" :class="{ on: autoOn && !!target }" aria-hidden="true" />
-      {{ autoOn ? "Frame the page" : "Detection off" }}
+      <template v-if="autoOn && target">Page found — it will be used</template>
+      <template v-else-if="autoOn">Looking for the page…</template>
+      <template v-else>Point at a page and tap the shutter</template>
     </p>
 
     <input ref="fileInput" type="file" accept="image/*" multiple hidden @change="onFiles" />

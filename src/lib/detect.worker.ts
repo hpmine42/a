@@ -13,7 +13,7 @@ self.onmessage = (event: MessageEvent<Request>) => {
   let quad: { x: number; y: number }[] | null = null;
   try {
     const img = new ImageData(new Uint8ClampedArray(buffer), width, height);
-    const found = detectPageQuad(img);
+    const found = detectPageQuad(img, { effort: "fast" });
     quad = found ? found.map((p) => ({ x: p.x, y: p.y })) : null;
   } catch (err) {
     console.warn("[flatbed] worker detection failed", err);
