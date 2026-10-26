@@ -34,17 +34,25 @@ Both images come from the demo photo that ships with the app.
 
 - **Live detection in the viewfinder.** A worker finds the sheet ~3×/second and
   the outline eases into place. Nothing to tap if it already looks right.
-- **Automatic crop on capture.** The detected quad is warped straight into a
-  rectangle the moment you press the shutter.
-- **Manual framing when it matters.** Tap the crop button: drag any corner with
-  a magnifier loupe for pixel-level placement, or drag the whole sheet. Every
-  release re-renders the page.
+- **You choose the crop, every shot.** After the shutter you pick *Detect
+  automatically* or *Crop manually* — nothing is processed until you decide.
+  Auto-detection is a suggestion, never a decision made behind your back.
+- **Manual framing that actually lands.** Drag any corner with a magnifier loupe
+  (it shows exactly the pixel under your finger), or drag the whole sheet. Every
+  release re-renders the page. The crop button switches back and forth.
 - **Three looks** — clean B&W (adaptive threshold, shadow-proof), grayscale,
   colour — as one-tap swatches.
 - **Multi-page PDF** at up to 2600px per page — A4, US Letter, or a page that
   matches the scan exactly.
 - **Installable** — a real PWA with an offline shell. Add it to the home screen
   and it keeps working with no network at all.
+
+## Mobile first
+
+One thumb, one hand: full-bleed viewfinder, 44px+ targets, safe-area aware
+docks, `100dvh` layout and no horizontal overflow. The desktop-only "phone on a
+desk" frame is gated behind `(hover: hover) and (pointer: fine)` so a real phone
+always gets the whole screen.
 
 ## How the detection works
 
@@ -79,13 +87,14 @@ If the browser blocks camera access (or you are on desktop), the app offers
 ```bash
 npm run typecheck  # vue-tsc, strict
 npm run test:cv    # real CV pipeline on the demo photo, with assertions
-npm test           # UI flows in jsdom + PDF page geometry
+npm test           # UI flows in jsdom, loupe/fit maths, PDF page geometry
 ```
 
 `test:cv` is the honest one: it detects the page in `public/samples/letter.jpg`,
 checks the corners against hand-measured coordinates, and fails the build if the
 detector drifts. `tests/pdf.test.ts` covers the placement maths, because getting
-that wrong prints cropped documents.
+that wrong prints cropped documents, and `tests/geometry.test.ts` pins the
+canvas → image mapping that the magnifier depends on.
 
 The B&W output runs a despeckle pass after the adaptive threshold: paper grain
 and JPEG noise become visible dirt once a page is pure black and white, and

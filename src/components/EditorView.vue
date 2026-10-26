@@ -6,10 +6,17 @@ import type { Mode, Quad } from "../lib/cv";
 import { canvasFor, containFit } from "../lib/image";
 import { activePage, autoDetect, processPage, scan } from "../lib/store";
 
+const props = withDefaults(
+  defineProps<{ initialMode?: "result" | "frame"; notice?: string | null }>(),
+  { initialMode: "result", notice: null }
+);
+
 const emit = defineEmits<{ (e: "back"): void; (e: "done"): void }>();
 
 const page = computed(() => activePage());
-const mode = ref<"result" | "frame">("result");
+const mode = ref<"result" | "frame">(props.initialMode);
+const notice = ref<string | null>(props.notice);
+let noticeTimer = 0;
 const busy = ref(false);
 const stage = ref<HTMLDivElement | null>(null);
 const resultCanvas = ref<HTMLCanvasElement | null>(null);
@@ -116,6 +123,16 @@ watch(
 );
 
 watch(
+  () => props.notice,
+  (next) => {
+    notice.value = next;
+    if (!next) return;
+    window.clearTimeout(noticeTimer);
+    noticeTimer = window.setTimeout(() => (notice.value = null), 4200);
+  }
+);
+
+watch(
   () => page.value?.id,
   async () => {
     mode.value = "result";
@@ -134,9 +151,16 @@ onMounted(async () => {
   } else {
     await nextTick(drawResult);
   }
+  if (props.notice) {
+    window.clearTimeout(noticeTimer);
+    noticeTimer = window.setTimeout(() => (notice.value = null), 4200);
+  }
 });
 
-onBeforeUnmount(() => observer?.disconnect());
+onBeforeUnmount(() => {
+  observer?.disconnect();
+  window.clearTimeout(noticeTimer);
+});
 
 defineExpose({ openFrame: () => (mode.value = "frame") });
 </script>
@@ -174,7 +198,10 @@ defineExpose({ openFrame: () => (mode.value = "frame") });
         @commit="onCommit"
       />
 
-      <p v-if="mode === 'frame'" class="frame-hint">Drag a corner to adjust</p>
+      <p v-if="mode === 'frame'" class="frame-hint">
+        {{ notice ?? "Drag a corner to adjust" }}
+      </p>
+      <p v-else-if="notice" class="frame-hint">{{ notice }}</p>
 
       <button v-if="mode === 'frame'" class="auto-pill" @click="runAuto">
         <Icon name="auto" :size="17" />

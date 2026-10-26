@@ -27,10 +27,18 @@ function stubDemoFetch() {
   );
 }
 
-async function openDemoPhoto(wrapper: VueWrapper) {
+/** Capture the demo photo and stop on the review screen. */
+async function shootDemo(wrapper: VueWrapper) {
   const demo = wrapper.findAll("button").find((b) => b.text().includes("Demo photo"));
   expect(demo, "demo photo button must exist when the camera is unavailable").toBeTruthy();
   await demo!.trigger("click");
+  await tick(300);
+}
+
+async function choose(wrapper: VueWrapper, label: string) {
+  const button = wrapper.findAll("button.choice").find((b) => b.text().includes(label));
+  expect(button, `choice "${label}" must exist`).toBeTruthy();
+  await button!.trigger("click");
   await tick(700);
 }
 
@@ -76,17 +84,65 @@ describe("camera", () => {
 });
 
 describe("capture flow", () => {
-  it("turns a photo into a page and opens the editor", async () => {
+  it("asks how to crop before anything is processed", async () => {
     stubDemoFetch();
     const wrapper = mount(App);
     await tick(20);
-    await openDemoPhoto(wrapper);
+    await shootDemo(wrapper);
+
+    // the fork between automatic and manual comes first
+    expect(wrapper.find(".review").exists()).toBe(true);
+    expect(wrapper.findAll("button.choice").length).toBe(2);
+    expect(wrapper.text()).toContain("Detect automatically");
+    expect(wrapper.text()).toContain("Crop manually");
+    // nothing has been added to the document yet
+    expect(scan.pages.length).toBe(0);
+    expect(wrapper.find(".editor").exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("detects automatically when that is chosen", async () => {
+    stubDemoFetch();
+    const wrapper = mount(App);
+    await tick(20);
+    await shootDemo(wrapper);
+    await choose(wrapper, "Detect automatically");
 
     expect(scan.pages.length).toBe(1);
     expect(wrapper.find(".editor").exists()).toBe(true);
-    // nothing detectable in the stub image, so the manual frame tool opens itself
+    // the stub image has no page edge, so the frame tool opens and says why
+    expect(wrapper.find(".corner-editor").exists()).toBe(true);
+    expect(wrapper.find(".frame-hint").text()).toContain("No page edge");
+    wrapper.unmount();
+  });
+
+  it("opens the corner tool straight away for manual cropping", async () => {
+    stubDemoFetch();
+    const wrapper = mount(App);
+    await tick(20);
+    await shootDemo(wrapper);
+    await choose(wrapper, "Crop manually");
+
+    expect(scan.pages.length).toBe(1);
+    expect(wrapper.find(".editor").exists()).toBe(true);
     expect(wrapper.find(".corner-editor").exists()).toBe(true);
     expect(wrapper.find(".auto-pill").exists()).toBe(true);
+    // no nagging notice when the choice was deliberate
+    expect(wrapper.find(".frame-hint").text()).toContain("Drag a corner");
+    wrapper.unmount();
+  });
+
+  it("can discard a shot and go back to the camera", async () => {
+    stubDemoFetch();
+    const wrapper = mount(App);
+    await tick(20);
+    await shootDemo(wrapper);
+
+    await wrapper.find('button[aria-label="Discard photo"]').trigger("click");
+    await tick(100);
+
+    expect(scan.pages.length).toBe(0);
+    expect(wrapper.find(".camera").exists()).toBe(true);
     wrapper.unmount();
   });
 
@@ -94,7 +150,8 @@ describe("capture flow", () => {
     stubDemoFetch();
     const wrapper = mount(App);
     await tick(20);
-    await openDemoPhoto(wrapper);
+    await shootDemo(wrapper);
+    await choose(wrapper, "Detect automatically");
 
     const gray = wrapper.find("button.swatch.gray");
     expect(gray.exists()).toBe(true);
@@ -110,7 +167,8 @@ describe("capture flow", () => {
     stubDemoFetch();
     const wrapper = mount(App);
     await tick(20);
-    await openDemoPhoto(wrapper);
+    await shootDemo(wrapper);
+    await choose(wrapper, "Crop manually");
 
     const editor = wrapper.findComponent({ name: "CornerEditor" });
     expect(editor.exists()).toBe(true);
@@ -127,7 +185,8 @@ describe("capture flow", () => {
     stubDemoFetch();
     const wrapper = mount(App);
     await tick(20);
-    await openDemoPhoto(wrapper);
+    await shootDemo(wrapper);
+    await choose(wrapper, "Detect automatically");
 
     const done = wrapper.find("button.done");
     expect(done.exists()).toBe(true);
@@ -144,7 +203,8 @@ describe("capture flow", () => {
     stubDemoFetch();
     const wrapper = mount(App);
     await tick(20);
-    await openDemoPhoto(wrapper);
+    await shootDemo(wrapper);
+    await choose(wrapper, "Detect automatically");
     await wrapper.find("button.done").trigger("click");
     await tick(100);
 
@@ -162,7 +222,8 @@ describe("capture flow", () => {
     stubDemoFetch();
     const wrapper = mount(App);
     await tick(20);
-    await openDemoPhoto(wrapper);
+    await shootDemo(wrapper);
+    await choose(wrapper, "Detect automatically");
     await wrapper.find("button.done").trigger("click");
     await tick(100);
 

@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { Pt, Quad } from "../lib/cv";
-import { canvasFor, containFit } from "../lib/image";
+import { canvasFor } from "../lib/image";
+import { clampToBox, containFit, loupeSourceRect, toImagePoint, type Fit } from "../lib/geometry";
 
 const props = defineProps<{ src: ImageData; quad: Quad }>();
 const emit = defineEmits<{
@@ -45,10 +46,7 @@ function toImage(clientX: number, clientY: number): Pt | null {
   const f = fit();
   if (!el || !f) return null;
   const rect = el.getBoundingClientRect();
-  return {
-    x: (clientX - rect.left - f.dx) / f.scale,
-    y: (clientY - rect.top - f.dy) / f.scale,
-  };
+  return toImagePoint({ x: clientX - rect.left, y: clientY - rect.top }, f);
 }
 
 function insidePolygon(p: Pt, quad: Quad): boolean {
@@ -150,56 +148,75 @@ function render() {
 
   // magnifier while dragging a corner: fine positioning on a phone needs it
   if (drag?.kind === "corner") {
-    drawLoupe(pts[drag.index], pts[drag.index], f.scale, w, h);
+    drawLoupe(pts[drag.index], f, w, h);
   }
 }
 
-function drawLoupe(anchor: Pt, handle: Pt, scale: number, w: number, h: number) {
+function drawLoupe(handle: Pt, f: Fit, w: number, h: number) {
   const g = ctx;
   if (!g) return;
-  const R = 52;
-  const zoom = 2.4;
-  // keep the loupe inside the stage and away from the finger
-  let cx = handle.x + (handle.x > w * 0.5 ? -R - 34 : R + 34);
-  let cy = handle.y + (handle.y > h * 0.5 ? -R - 26 : R + 26);
-  cx = Math.max(R + 8, Math.min(w - R - 8, cx));
-  cy = Math.max(R + 8, Math.min(h - R - 8, cy));
+  const R = 58;
+  const zoom = 2.6;
 
+  // sit the loupe away from the finger, then keep it inside the stage
+  const preferred = {
+    x: handle.x + (handle.x > w * 0.5 ? -R - 40 : R + 40),
+    y: handle.y + (handle.y > h * 0.5 ? -R - 34 : R + 34),
+  };
+  const centre = clampToBox(preferred, R, w, h);
+
+  const src = loupeSourceRect(handle, f, R, zoom);
   g.save();
   g.beginPath();
-  g.arc(cx, cy, R, 0, Math.PI * 2);
+  g.arc(centre.x, centre.y, R, 0, Math.PI * 2);
   g.closePath();
   g.clip();
   g.fillStyle = "#0a0b0d";
-  g.fillRect(cx - R, cy - R, R * 2, R * 2);
+  g.fillRect(centre.x - R, centre.y - R, R * 2, R * 2);
 
-  const src = canvasFor(props.src);
-  const ix = anchor.x / scale;
-  const iy = anchor.y / scale;
+  const img = canvasFor(props.src);
   g.imageSmoothingQuality = "high";
-  g.drawImage(src, ix - R / zoom, iy - R / zoom, (R * 2) / zoom, (R * 2) / zoom, cx - R, cy - R, R * 2, R * 2);
+  g.drawImage(img, src.sx, src.sy, src.size, src.size, centre.x - R, centre.y - R, R * 2, R * 2);
 
-  // reticle
-  g.strokeStyle = "rgba(255, 192, 97, 0.9)";
+  // reticle marks the exact pixel under the corner
+  g.strokeStyle = "rgba(255, 192, 97, 0.95)";
   g.lineWidth = 1;
   g.beginPath();
-  g.moveTo(cx - 10, cy);
-  g.lineTo(cx + 10, cy);
-  g.moveTo(cx, cy - 10);
-  g.lineTo(cx, cy + 10);
+  g.moveTo(centre.x - 11, centre.y);
+  g.lineTo(centre.x - 4, centre.y);
+  g.moveTo(centre.x + 4, centre.y);
+  g.lineTo(centre.x + 11, centre.y);
+  g.moveTo(centre.x, centre.y - 11);
+  g.lineTo(centre.x, centre.y - 4);
+  g.moveTo(centre.x, centre.y + 4);
+  g.lineTo(centre.x, centre.y + 11);
   g.stroke();
   g.beginPath();
-  g.arc(cx, cy, 14, 0, Math.PI * 2);
-  g.strokeStyle = "rgba(255, 255, 255, 0.5)";
-  g.stroke();
+  g.arc(centre.x, centre.y, 2, 0, Math.PI * 2);
+  g.fillStyle = "rgba(255, 192, 97, 0.95)";
+  g.fill();
   g.restore();
 
-  // ring
+  // ring + a hairline back to the handle, so it is obvious what is magnified
   g.beginPath();
-  g.arc(cx, cy, R, 0, Math.PI * 2);
+  g.arc(centre.x, centre.y, R, 0, Math.PI * 2);
   g.lineWidth = 2;
   g.strokeStyle = "rgba(255, 192, 97, 0.95)";
   g.stroke();
+
+  g.save();
+  g.setLineDash([3, 4]);
+  g.lineWidth = 1;
+  g.strokeStyle = "rgba(255, 192, 97, 0.45)";
+  const len = Math.hypot(centre.x - handle.x, centre.y - handle.y);
+  if (len > R + 4) {
+    const t = (len - R) / len;
+    g.beginPath();
+    g.moveTo(handle.x, handle.y);
+    g.lineTo(handle.x + (centre.x - handle.x) * t, handle.y + (centre.y - handle.y) * t);
+    g.stroke();
+  }
+  g.restore();
 }
 
 /* ------------------------------------------------------------------ input */
