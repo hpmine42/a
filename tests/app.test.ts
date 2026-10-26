@@ -43,6 +43,7 @@ async function choose(wrapper: VueWrapper, label: string) {
 
 beforeEach(() => {
   clearPages();
+  window.localStorage.clear();
   denyCamera();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -64,6 +65,20 @@ describe("camera", () => {
     expect(wrapper.text()).toContain("Photos");
     expect(wrapper.text()).toContain("Flip");
     wrapper.unmount();
+  });
+
+  it("remembers the Detect switch between visits", async () => {
+    allowCamera();
+    const first = mount(App);
+    await tick(30);
+    await first.find('button[aria-label="Detect the page while framing"]').trigger("click");
+    await tick(10);
+    first.unmount();
+
+    const second = mount(App);
+    await tick(30);
+    expect(second.find('button[aria-label="Detect the page while framing"]').classes()).toContain("on");
+    second.unmount();
   });
 
   it("has detection off by default and lets the user switch it on", async () => {
@@ -111,10 +126,10 @@ describe("capture with a known page", () => {
     expect(wrapper.find(".editor").exists()).toBe(true);
     expect(scan.pages.length).toBe(1);
     // detection runs on a 320px frame of a 1280px video, so the stored quad is
-    // scaled back up by 4 (20 → 80) and then pulled in a hair, so no desk edge
-    // ends up on the finished page
-    expect(scan.pages[0].quad[0].x).toBeGreaterThan(80);
-    expect(scan.pages[0].quad[0].x).toBeLessThan(92);
+    // scaled back up by 4 (20 → 80); the page keeps exactly what was found and
+    // the render pulls the crop in a hair, so no desk edge ends up on the page
+    expect(scan.pages[0].quad[0].x).toBeGreaterThan(78);
+    expect(scan.pages[0].quad[0].x).toBeLessThan(82);
     wrapper.unmount();
   });
 
@@ -160,7 +175,7 @@ describe("capture without a page", () => {
 
     expect(wrapper.find(".editor").exists()).toBe(true);
     expect(wrapper.find(".corner-editor").exists()).toBe(true);
-    expect(wrapper.find(".auto-pill").text()).toContain("Detect page");
+    expect(wrapper.find(".auto-pill").text()).toContain("Find the page");
     wrapper.unmount();
   });
 
@@ -204,25 +219,73 @@ describe("capture without a page", () => {
 });
 
 describe("editor", () => {
-  it("switches the look from the labelled dock", async () => {
+  it("has one Optimize switch, on by default, and it toggles", async () => {
     stubDemoFetch();
     const wrapper = mount(App);
     await tick(20);
     await shootDemo(wrapper);
     await choose(wrapper, "Crop it by hand");
 
-    const looks = wrapper.findAll("button.look");
-    expect(looks.length).toBe(3);
-    expect(looks.map((l) => l.text())).toEqual(["B/W", "Grey", "Colour"]);
-    // a plain segmented control: text only, no thumbnail hunt
-    expect(wrapper.findAll("button.look img")).toHaveLength(0);
+    const button = wrapper.find("button.optimize");
+    expect(button.exists()).toBe(true);
+    expect(button.text()).toContain("Optimize");
+    // crisp text is the point of a scanner, so it starts on
+    expect(scan.pages[0].opts.optimize).toBe(true);
+    expect(button.attributes("aria-pressed")).toBe("true");
+    expect(button.classes()).toContain("on");
+    expect(button.text()).toContain("On");
 
-    const gray = wrapper.find("button.look.gray");
-    await gray.trigger("click");
-    await tick(200);
+    await button.trigger("click");
+    await tick(300);
 
-    expect(scan.pages[0].opts.mode).toBe("gray");
-    expect(gray.classes()).toContain("active");
+    expect(scan.pages[0].opts.optimize).toBe(false);
+    expect(button.attributes("aria-pressed")).toBe("false");
+    expect(button.text()).toContain("Off");
+
+    await button.trigger("click");
+    await tick(300);
+    expect(scan.pages[0].opts.optimize).toBe(true);
+    wrapper.unmount();
+  });
+
+  it("renders the new crop when Done is tapped straight from the crop tool", async () => {
+    stubDemoFetch();
+    const wrapper = mount(App);
+    await tick(20);
+    await shootDemo(wrapper);
+    await choose(wrapper, "Crop it by hand");
+
+    const page = scan.pages[0];
+    const before = page.result;
+    const editor = wrapper.findComponent({ name: "CornerEditor" });
+    const next = page.quad.map((p) => ({ x: p.x * 0.7, y: p.y * 0.7 }));
+    editor.vm.$emit("update:quad", next);
+    await wrapper.find("button.done").trigger("click");
+    await tick(500);
+
+    // the grid shows the page that was just cropped, not the one before it
+    expect(wrapper.find(".pages").exists()).toBe(true);
+    expect(page.result).not.toBe(before);
+    expect(page.cacheKey).not.toBe("");
+    wrapper.unmount();
+  });
+
+  it("does no image work while the corner tool is open", async () => {
+    stubDemoFetch();
+    const wrapper = mount(App);
+    await tick(20);
+    await shootDemo(wrapper);
+    await choose(wrapper, "Crop it by hand");
+
+    const editor = wrapper.findComponent({ name: "CornerEditor" });
+    const before = scan.pages[0].result;
+    const next = scan.pages[0].quad.map((p) => ({ x: p.x * 0.9, y: p.y * 0.9 }));
+    editor.vm.$emit("update:quad", next);
+    await editor.vm.$emit("commit");
+    await tick(120);
+
+    // dragging must not trigger a warp per finger lift
+    expect(scan.pages[0].result).toBe(before);
     wrapper.unmount();
   });
 
@@ -281,6 +344,51 @@ describe("pages", () => {
 
     expect(scan.pages.length).toBe(0);
     expect(wrapper.findAll(".page-card").length).toBe(0);
+
+    // deleting is one fat finger away from disaster, and there is no re-shoot
+    expect(wrapper.find(".undo-bar").exists()).toBe(true);
+    await wrapper.find(".undo-action").trigger("click");
+    await tick(50);
+    expect(scan.pages.length).toBe(1);
+    expect(wrapper.findAll(".page-card").length).toBe(1);
+    expect(wrapper.find(".undo-bar").exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("returns to the page grid when the editor was opened from it", async () => {
+    stubDemoFetch();
+    const wrapper = mount(App);
+    await tick(20);
+    await shootDemo(wrapper);
+    await choose(wrapper, "Crop it by hand");
+    await wrapper.find("button.done").trigger("click");
+    await tick(100);
+    expect(wrapper.find(".pages").exists()).toBe(true);
+
+    // tap the thumbnail: the editor opens, and Back must lead to the grid again
+    await wrapper.find(".page-thumb").trigger("click");
+    await tick(200);
+    expect(wrapper.find(".editor").exists()).toBe(true);
+    expect(wrapper.find('.editor-top button[aria-label="Back to pages"]').exists()).toBe(true);
+
+    await wrapper.find('.editor-top button[aria-label="Back to pages"]').trigger("click");
+    await tick(100);
+    expect(wrapper.find(".pages").exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  it("explains the empty grid instead of leaving a lonely plus", async () => {
+    stubDemoFetch();
+    const wrapper = mount(App);
+    await tick(20);
+    await shootDemo(wrapper);
+    await choose(wrapper, "Crop it by hand");
+    await wrapper.find("button.done").trigger("click");
+    await tick(100);
+
+    await wrapper.find(".page-del").trigger("click");
+    await tick(50);
+    expect(wrapper.find(".pages-empty").text()).toContain("No pages yet");
     wrapper.unmount();
   });
 });

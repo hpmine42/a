@@ -81,7 +81,7 @@ button {
    decorative chips included, so a stray drag cannot leave a blue selection. */
 .brand,
 .dock-label,
-.look-label,
+.optimize-text,
 .zoom-chip,
 .zoom-value,
 .paper,
@@ -451,6 +451,28 @@ img {
 .pill.ghost:hover {
   color: var(--text);
   background: rgba(255, 255, 255, 0.06);
+}
+
+/* A small, honest "working" chip: decoding a photo from the library can take a
+   moment on a phone, and silence looks like a broken button. */
+.camera-busy {
+  position: absolute;
+  z-index: 4;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: inline-flex;
+  align-items: center;
+  gap: calc(10px * var(--u));
+  padding: calc(12px * var(--u)) calc(20px * var(--u));
+  border-radius: 999px;
+  font-size: calc(14px * var(--u));
+  font-weight: 600;
+  color: var(--text);
+  background: rgba(10, 12, 15, 0.82);
+  border: 1px solid var(--line-strong);
+  backdrop-filter: blur(12px);
+  pointer-events: none;
 }
 
 /* dock ------------------------------------------------------------------- */
@@ -868,6 +890,20 @@ img {
   opacity: 0.72;
 }
 
+.choice:disabled {
+  cursor: progress;
+}
+
+.choice:disabled:not(.primary) {
+  opacity: 0.5;
+}
+
+.choice-icon .spinner {
+  width: calc(20px * var(--u));
+  height: calc(20px * var(--u));
+  border-width: 2px;
+}
+
 /* ==========================================================================
    editor
    ========================================================================== */
@@ -924,6 +960,21 @@ img {
     0 2px 8px rgba(0, 0, 0, 0.4);
 }
 
+/* A breath of a fade when the same page is re-rendered in the other mode: the
+   eye reads it as "that changed", not as a glitch. */
+.paper-canvas.swapping {
+  animation: paper-swap 0.22s var(--ease);
+}
+
+@keyframes paper-swap {
+  from {
+    opacity: 0.35;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
 .corner-editor {
   position: absolute;
   inset: 0;
@@ -952,7 +1003,8 @@ img {
   border: 1px solid var(--line);
   backdrop-filter: blur(10px);
   pointer-events: none;
-  white-space: nowrap;
+  text-align: center;
+  line-height: 1.3;
 }
 
 .auto-pill {
@@ -1006,57 +1058,122 @@ img {
     calc(16px * var(--u) + env(safe-area-inset-bottom, 0px));
 }
 
-/* One row, three words, the chosen one lit. No thumbnails: three tiny copies of
-   the same page read as a bug, not as a choice. */
-.looks {
-  display: flex;
+/* One switch for the whole look. On = flat light, black text on white paper;
+   off = the photo exactly as it came. The switch is the readout, so there is
+   nothing to hunt and nothing to compare side by side. */
+.optimize {
   flex: 1 1 auto;
   min-width: 0;
-  gap: calc(4px * var(--u));
-  padding: calc(4px * var(--u));
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid var(--line);
-}
-
-.look {
-  flex: 1 1 0;
-  min-width: 0;
-  height: calc(46px * var(--u));
-  padding: 0 calc(10px * var(--u));
-  border-radius: 999px;
-  font-size: calc(13.5px * var(--u));
-  font-weight: 650;
-  letter-spacing: -0.005em;
-  color: var(--muted);
-  white-space: nowrap;
-  transition: color 0.15s var(--ease), background 0.18s var(--ease),
-    box-shadow 0.18s var(--ease), transform 0.12s var(--ease);
-}
-
-.look:hover {
+  display: flex;
+  align-items: center;
+  gap: calc(11px * var(--u));
+  height: var(--tap-lg);
+  padding: 0 calc(14px * var(--u)) 0 calc(12px * var(--u));
+  border-radius: calc(18px * var(--u));
+  text-align: left;
   color: var(--text);
-  background: rgba(255, 255, 255, 0.05);
+  background: rgba(255, 255, 255, 0.055);
+  border: 1px solid var(--line);
+  transition: background 0.18s var(--ease), border-color 0.18s var(--ease),
+    transform 0.12s var(--ease);
 }
 
-.look:active {
-  transform: scale(0.97);
+.optimize:hover {
+  background: rgba(255, 255, 255, 0.085);
 }
 
-.look.active {
+.optimize:active {
+  transform: scale(0.985);
+}
+
+.optimize.on {
+  background: linear-gradient(
+    150deg,
+    rgba(255, 192, 97, 0.16),
+    rgba(255, 192, 97, 0.07)
+  );
+  border-color: rgba(255, 192, 97, 0.4);
+}
+
+.optimize-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: calc(36px * var(--u));
+  height: calc(36px * var(--u));
+  border-radius: 50%;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.07);
+  transition: color 0.18s var(--ease), background 0.2s var(--ease),
+    box-shadow 0.2s var(--ease);
+}
+
+.optimize.on .optimize-icon {
   color: #1a1305;
   background: linear-gradient(160deg, #ffd79a, var(--amber));
-  box-shadow: 0 6px 16px rgba(255, 192, 97, 0.22);
+  box-shadow: 0 4px 14px rgba(255, 192, 97, 0.28);
 }
 
-.look.active .look-label {
-  color: inherit;
+.optimize-text {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
-.look-label {
-  display: block;
+.optimize-text strong {
+  font-size: calc(15px * var(--u));
+  font-weight: 650;
+  letter-spacing: -0.012em;
+  line-height: 1.15;
+}
+
+.optimize-text small {
+  font-size: calc(11.5px * var(--u));
+  line-height: 1.2;
+  color: var(--muted-2);
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  transition: color 0.18s var(--ease);
+}
+
+.optimize.on .optimize-text small {
+  color: rgba(255, 214, 152, 0.82);
+}
+
+.optimize-switch {
+  position: relative;
+  flex: 0 0 auto;
+  width: calc(42px * var(--u));
+  height: calc(26px * var(--u));
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.13);
+  transition: background 0.2s var(--ease);
+}
+
+.optimize-switch span {
+  position: absolute;
+  top: 50%;
+  left: calc(3px * var(--u));
+  width: calc(20px * var(--u));
+  height: calc(20px * var(--u));
+  margin-top: calc(-10px * var(--u));
+  border-radius: 50%;
+  background: #dfe4ea;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+  transition: transform 0.2s var(--ease), background 0.2s var(--ease);
+}
+
+.optimize.on .optimize-switch {
+  background: rgba(255, 192, 97, 0.9);
+}
+
+.optimize.on .optimize-switch span {
+  transform: translateX(calc(16px * var(--u)));
+  background: #241a08;
 }
 
 .done {
@@ -1111,6 +1228,68 @@ img {
   padding: calc(8px * var(--u)) calc(16px * var(--u)) calc(16px * var(--u));
   overflow-y: auto;
   scrollbar-width: thin;
+}
+
+.pages-empty {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: calc(4px * var(--u));
+  margin: 0 0 calc(4px * var(--u));
+  padding: calc(22px * var(--u)) calc(20px * var(--u));
+  border-radius: calc(16px * var(--u));
+  text-align: center;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--line);
+}
+
+.pages-empty strong {
+  font-size: calc(15px * var(--u));
+  font-weight: 650;
+  color: var(--text);
+}
+
+.pages-empty span {
+  font-size: var(--fs-small);
+}
+
+/* Reversible actions: a small bar that sits above the dock, so the undo is in
+   the same place the disappearing page was. */
+.undo-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(12px * var(--u));
+  margin: 0 calc(16px * var(--u)) calc(8px * var(--u));
+  padding: calc(9px * var(--u)) calc(10px * var(--u)) calc(9px * var(--u))
+    calc(16px * var(--u));
+  border-radius: 999px;
+  font-size: calc(14px * var(--u));
+  color: var(--text);
+  background: rgba(26, 30, 36, 0.92);
+  border: 1px solid var(--line-strong);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.45);
+  animation: undo-in 0.18s var(--ease);
+}
+
+@keyframes undo-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+.undo-action {
+  padding: calc(7px * var(--u)) calc(16px * var(--u));
+  border-radius: 999px;
+  font-size: calc(13.5px * var(--u));
+  font-weight: 700;
+  color: #1a1305;
+  background: var(--amber);
+}
+
+.undo-action:active {
+  transform: scale(0.96);
 }
 
 .page-card {
@@ -1169,8 +1348,8 @@ img {
   right: calc(6px * var(--u));
   display: grid;
   place-items: center;
-  width: calc(38px * var(--u));
-  height: calc(38px * var(--u));
+  width: calc(40px * var(--u));
+  height: calc(40px * var(--u));
   border-radius: 50%;
   color: #fff;
   background: rgba(12, 14, 18, 0.66);
@@ -1325,6 +1504,8 @@ img {
 }
 
 .save {
+  position: relative;
+  overflow: hidden;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1339,6 +1520,21 @@ img {
   background: linear-gradient(160deg, #ffd79a, var(--amber));
   box-shadow: 0 12px 30px rgba(255, 192, 97, 0.18);
   transition: transform 0.12s var(--ease), box-shadow 0.18s var(--ease), opacity 0.15s;
+}
+
+/* The build progress fills the button from the left: the same tap target keeps
+   reporting, so nobody has to hunt for a progress bar. */
+.save-bar {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: rgba(255, 255, 255, 0.42);
+  transition: width 0.25s var(--ease);
+  pointer-events: none;
+}
+
+.save > svg,
+.save > span:not(.save-bar) {
+  position: relative;
 }
 
 .save:hover:not(:disabled) {
@@ -1491,9 +1687,12 @@ html[data-fit="boost"] body {
 /* Short viewports (landscape phones, small windows): keep the stage usable. */
 /* Very narrow phones: the dock has to stay on one line. */
 @media (max-width: 360px) {
-  .look {
-    padding: 0 calc(6px * var(--u));
-    font-size: calc(12.5px * var(--u));
+  .optimize {
+    padding-right: calc(10px * var(--u));
+  }
+
+  .optimize-text small {
+    display: none;
   }
 
   .done {
@@ -1521,8 +1720,8 @@ html[data-fit="boost"] body {
     padding: 10px 16px;
   }
 
-  .look {
-    height: calc(42px * var(--u));
+  .optimize {
+    height: calc(52px * var(--u));
   }
 
   .shutter {

@@ -9,6 +9,8 @@ const props = defineProps<{
   pageCount: number;
   /** Was live detection switched on when this photo was taken? */
   detectionOn: boolean;
+  /** A detection pass is running; the sheet must not move under the finger. */
+  busy?: boolean;
 }>();
 const emit = defineEmits<{
   (e: "auto"): void;
@@ -92,15 +94,18 @@ watch(() => props.src, draw);
         </span>
       </p>
 
-      <button class="choice primary" @click="emit('auto')">
-        <span class="choice-icon"><Icon name="auto" :size="22" /></span>
+      <button class="choice primary" :disabled="props.busy" @click="emit('auto')">
+        <span class="choice-icon">
+          <span v-if="props.busy" class="spinner" />
+          <Icon v-else name="auto" :size="22" />
+        </span>
         <span class="choice-text">
-          <strong>Find the page automatically</strong>
-          <small>Scan this photo once for a paper edge</small>
+          <strong>{{ props.busy ? "Looking for the page…" : "Find the page automatically" }}</strong>
+          <small>{{ props.busy ? "One pass over the photo" : "Scan this photo once for a paper edge" }}</small>
         </span>
       </button>
 
-      <button class="choice" @click="emit('manual')">
+      <button class="choice" :disabled="props.busy" @click="emit('manual')">
         <span class="choice-icon"><Icon name="crop" :size="22" /></span>
         <span class="choice-text">
           <strong>Crop it by hand</strong>
@@ -108,7 +113,7 @@ watch(() => props.src, draw);
         </span>
       </button>
 
-      <button class="choice" @click="emit('whole')">
+      <button class="choice" :disabled="props.busy" @click="emit('whole')">
         <span class="choice-icon"><Icon name="image" :size="22" /></span>
         <span class="choice-text">
           <strong>Keep the whole photo</strong>

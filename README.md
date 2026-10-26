@@ -50,15 +50,20 @@ camera frame — desk, shadow, skew. After is what the export produces.
   sheet, that crop is used without asking. If it is not, Scano asks: crop by
   hand, detect this photo, or keep the whole frame.
 - **Manual framing that actually lands.** Drag any corner with a magnifier loupe
-  (it shows exactly the pixel under your finger), or drag the whole sheet. Every
-  release re-renders the page. The crop button switches back and forth.
-- **Three looks, one row** — B&W, soft grey or the original colour, chosen from a
-  single segmented control where the active one is lit amber.
+  (it shows exactly the pixel under your finger), or drag the whole sheet. The
+  page is re-rendered once, when you leave the crop tool, so dragging stays
+  butter-smooth instead of warping a photo on every finger lift.
+- **One switch, no look-hunting.** *Optimize* flattens the lighting, whitens the
+  paper and sharpens the text; off gives you the straight photo exactly as it
+  was taken. It is the only image control in the app, and it costs one pass
+  over the preview rather than a re-import.
 - **Multi-page PDF** at up to 3000px per page — A4, US Letter, or a page that
   matches the scan exactly — with the file name typed in the app before saving.
 - **Pinch to zoom in the viewfinder**, with 0.5× / 1× / 2× chips and a switch to
   the ultra-wide lens when the phone exposes one. Everywhere else the app holds
   pinch-to-zoom shut, because it only ever fights the user.
+- **Light on first load.** jsPDF and its dependencies (~370 kB) are only
+  downloaded when a PDF is actually saved; the app itself is 53 kB gzipped.
 - **Installable** — a real PWA with an offline shell. Add it to the home screen
   and it keeps working with no network at all.
 
@@ -87,15 +92,20 @@ light is never even. So `enhance()` works in this order:
 1. **Flatten the illumination** — estimate the light as a heavy blur of the
    luma, then divide it out. Shadows stop being something the threshold has to
    fight, which is what used to leave grey blotches and grey paper.
-2. **Stretch the levels** on 2%–98.5% percentiles, ignoring the tails.
-3. **Sharpen** with an unsharp mask sized for grain, not for edges.
+2. **Stretch the levels** on the 2%–98.5% percentiles of the *lit* page,
+   ignoring the tails.
+3. **Smooth** with a 3×3 box in Optimize mode — a threshold cannot tell sensor
+   grain from a full stop, so the grain goes first. (Colour mode sharpens with
+   an unsharp mask instead; there the pixels are the product.)
 4. **Threshold** (B&W) with a Sauvola map computed on a small copy and sampled
    back up — soft edges, so small type stays readable instead of turning into
    speckle.
 
-Imports are read at up to 3600px, previews render at 2400px, exports at 3000px.
-Both the crop and the export pull the quad in by 0.5%, because detection and
-hand-placed corners both tend to sit a pixel outside the paper — that sliver of
+Imports are read at up to 3600px and exports at 3000px. The editor renders at
+the size of the glass instead of a fixed 2400px — a page shown 390px wide gains
+nothing from a 6× oversampled buffer, and the difference is what makes toggling
+*Optimize* feel instant. The crop is pulled in by 0.8%, because detection and
+hand-placed corners both tend to sit a little outside the paper — that sliver of
 desk is the dark line along the edge of an otherwise clean scan.
 
 ## How the detection works
@@ -115,8 +125,10 @@ No ML model and no WASM download — plain TypeScript in
    paper-over-desk edge. Gates on movement, gradient and paper evidence keep an
    empty desk from being reported as a document.
 
-The winner is then snapped precisely, and the result is warped with a
-homography and thresholded with Sauvola. Colour is used throughout: a pale
+The winner is then snapped precisely, checked against a second opinion from the
+*unclosed* mask (closing glues a pen or a shadow to the sheet and inflates the
+rectangle, the raw blob does not), warped with a homography and thresholded
+with Sauvola. Colour is used throughout: a pale
 wooden desk can match paper in brightness while being obviously different in
 hue, which is exactly where a luma-only detector fails.
 

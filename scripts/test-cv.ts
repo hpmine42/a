@@ -31,14 +31,20 @@ class ImageDataShim {
 (globalThis as unknown as { ImageData: typeof ImageDataShim }).ImageData = ImageDataShim;
 
 const SOURCE = "public/samples/letter.jpg";
-/** Corners measured by hand on the demo photo: TL, TR, BR, BL. */
+/**
+ * Corners measured on the demo photo by scanning the paper/desk boundary
+ * column by column (TL, TR, BR, BL). The earlier numbers were eyeballed, and a
+ * 35px error in one corner was quietly tolerated for several rounds.
+ */
 const EXPECTED = [
   { x: 300, y: 160 },
-  { x: 790, y: 78 },
-  { x: 990, y: 700 },
-  { x: 395, y: 838 },
+  { x: 756, y: 86 },
+  { x: 980, y: 700 },
+  { x: 397, y: 838 },
 ];
-const TOLERANCE = 90;
+/** Tightened after round 12: the detector now lands within a few pixels on this
+ *  photo, and a loose tolerance is what let a 50px crop error ship unnoticed. */
+const TOLERANCE = 25;
 
 let failures = 0;
 function check(name: string, ok: boolean, detail: string) {

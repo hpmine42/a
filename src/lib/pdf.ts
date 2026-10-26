@@ -1,7 +1,7 @@
-import { jsPDF } from "jspdf";
+import type { jsPDF as JsPdf } from "jspdf";
 import { enhance, insetQuad, outputSize, warp } from "./cv";
 import { imageDataToCanvas, nextFrame, slug } from "./image";
-import { EXPORT_MAX, type Page } from "./store";
+import { EDGE_INSET, EXPORT_MAX, type Page } from "./store";
 
 export type PageFormat = "a4" | "letter" | "fit";
 
@@ -78,19 +78,27 @@ export async function exportPdf(
   /** Base name for the file, without `.pdf`. */
   name = ""
 ): Promise<string> {
-  let doc: jsPDF | null = null;
+  // jsPDF and its dependencies are ~370 kB that nobody needs until the moment a
+  // PDF is saved, so the whole library is loaded on demand.
+  const { jsPDF } = await import("jspdf");
+  let doc: JsPdf | null = null;
 
   for (let i = 0; i < pages.length; i++) {
     const page = pages[i];
     onProgress?.(i, pages.length);
     await nextFrame();
 
-    const quad = insetQuad(page.quad, 0.005);
+    const quad = insetQuad(page.quad, EDGE_INSET);
     const size = outputSize(quad, EXPORT_MAX);
     const warped = warp(page.src, quad, size.w, size.h);
-    const result = enhance(warped, page.opts);
-    // 0.94 keeps text crisp without doubling the file size
-    const dataUrl = imageDataToCanvas(result).toDataURL("image/jpeg", 0.94);
+    // Optimize off means untouched: the straight photo, nothing applied
+    const result = page.opts.optimize
+      ? enhance(warped, { mode: "bw", brightness: 0, contrast: 0, strength: 58 })
+      : warped;
+    // An optimised page is black text on paper: it survives 0.9 untouched and
+    // saves a third of the file. A photo keeps 0.95 — that is where it shows.
+    const quality = page.opts.optimize ? 0.9 : 0.95;
+    const dataUrl = imageDataToCanvas(result).toDataURL("image/jpeg", quality);
 
     const paper =
       format === "fit"

@@ -4,9 +4,10 @@ import CameraView from "./components/CameraView.vue";
 import CaptureReview from "./components/CaptureReview.vue";
 import EditorView from "./components/EditorView.vue";
 import PagesView from "./components/PagesView.vue";
-import { detectPageQuad, fullFrameQuad, insetQuad, type Quad } from "./lib/cv";
+import { detectPageQuad, fullFrameQuad, type Quad } from "./lib/cv";
+import { tap, thump } from "./lib/haptics";
 import { makeThumb, nextFrame } from "./lib/image";
-import { addPage, processPage, scan } from "./lib/store";
+import { addPage, FIRST_RENDER, processPage, scan } from "./lib/store";
 
 type View = "camera" | "review" | "edit" | "pages";
 type Shot = { img: ImageData; quad: Quad | null; auto: boolean };
@@ -17,13 +18,15 @@ const scanThumb = ref("");
 const pending = ref<ImageData | null>(null);
 /** Did the viewfinder have detection switched on when the photo was taken? */
 const pendingAuto = ref(false);
+/** The review sheet is working (a full detection pass), so it must stay put. */
+const reviewBusy = ref(false);
 const editorMode = ref<"result" | "frame">("result");
+/** Where the editor goes back to: the camera after a shot, the grid after a tap. */
+const editorReturn = ref<"camera" | "pages">("camera");
 const editorNotice = ref<string | null>(null);
 
 const queue: Shot[] = [];
 let busy = false;
-
-const sleep = (ms: number) => new Promise<void>((r) => window.setTimeout(r, ms));
 
 /* ---------------------------------------------------------------- capture */
 
@@ -58,26 +61,35 @@ function pump() {
 async function applyDetected(img: ImageData, quad: Quad) {
   scanThumb.value = makeThumb(img, 300, 400);
   scanning.value = true;
+  thump();
   await nextFrame();
   try {
     const page = addPage(img, "scan");
-    page.quad = insetQuad(quad, 0.005);
+    page.quad = quad;
     page.warped = null;
-    await processPage(page, { full: true, rewriteWarp: true });
-    await sleep(300);
+    // Enough pixels for the first look and for a sharp thumbnail; the editor
+    // re-renders at screen size only if its stage needs more than this.
+    await processPage(page, { full: true, rewriteWarp: true, maxSide: FIRST_RENDER });
     editorMode.value = "result";
     editorNotice.value = null;
+    editorReturn.value = "camera";
     view.value = "edit";
   } finally {
     scanning.value = false;
   }
 }
 
-/** Let the detector have a go on the captured photo. */
+/**
+ * Let the detector have a go on the captured photo.
+ *
+ * The photo stays on the review sheet for as long as the work takes: clearing
+ * `pending` first would unmount the sheet and flash the page grid for half a
+ * second, which reads like a bug.
+ */
 async function chooseAuto() {
   const img = pending.value;
-  if (!img) return;
-  pending.value = null;
+  if (!img || reviewBusy.value) return;
+  reviewBusy.value = true;
   busy = true;
   try {
     const quad = detectPageQuad(img, { effort: "thorough" });
@@ -88,10 +100,13 @@ async function chooseAuto() {
       page.quad = fullFrameQuad(img.width, img.height);
       page.warped = null;
       editorMode.value = "frame";
-      editorNotice.value = "No page edge found — crop it by hand";
+      editorNotice.value = "No page edge found — drag the corners";
+      editorReturn.value = "camera";
       view.value = "edit";
     }
   } finally {
+    pending.value = null;
+    reviewBusy.value = false;
     busy = false;
     pump();
   }
@@ -102,13 +117,15 @@ function chooseManual() {
   const img = pending.value;
   if (!img) return;
   pending.value = null;
+  tap();
   const page = addPage(img, "scan");
   // a detection guess is a decent starting point, but it never blocks the user
   const guess = detectPageQuad(img, { effort: "fast" });
-  page.quad = guess ? insetQuad(guess, 0.005) : fullFrameQuad(img.width, img.height);
+  page.quad = guess ?? fullFrameQuad(img.width, img.height);
   page.warped = null;
   editorMode.value = "frame";
   editorNotice.value = null;
+  editorReturn.value = "camera";
   view.value = "edit";
 }
 
@@ -117,11 +134,13 @@ function chooseWhole() {
   const img = pending.value;
   if (!img) return;
   pending.value = null;
+  tap();
   const page = addPage(img, "scan");
   page.quad = fullFrameQuad(img.width, img.height);
   page.warped = null;
   editorMode.value = "frame";
   editorNotice.value = "Drag the corners if you want a tighter crop";
+  editorReturn.value = "camera";
   view.value = "edit";
 }
 
@@ -135,7 +154,19 @@ function retake() {
 
 function onEdit(id: number) {
   scan.activeId = id;
+  editorMode.value = "result";
+  editorNotice.value = null;
+  editorReturn.value = "pages";
   view.value = "edit";
+}
+
+/** Leaving the editor: back where the user came from, never a surprise jump. */
+function leaveEditor() {
+  if (editorReturn.value === "pages") {
+    view.value = "pages";
+    return;
+  }
+  goCamera();
 }
 
 function goCamera() {
@@ -145,7 +176,8 @@ function goCamera() {
 
 function onKey(event: KeyboardEvent) {
   if (event.key !== "Escape") return;
-  if (view.value === "edit" || view.value === "pages" || view.value === "review") goCamera();
+  if (view.value === "edit") leaveEditor();
+  else if (view.value === "pages" || view.value === "review") goCamera();
 }
 
 onMounted(() => window.addEventListener("keydown", onKey));
@@ -170,6 +202,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
         :src="pending"
         :page-count="scan.pages.length"
         :detection-on="pendingAuto"
+        :busy="reviewBusy"
         @auto="chooseAuto"
         @manual="chooseManual"
         @whole="chooseWhole"
@@ -181,7 +214,8 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
         key="edit"
         :initial-mode="editorMode"
         :notice="editorNotice"
-        @back="goCamera"
+        :back-to="editorReturn"
+        @back="leaveEditor"
         @done="view = 'pages'"
       />
 

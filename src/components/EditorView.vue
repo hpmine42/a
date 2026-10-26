@@ -2,33 +2,64 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import CornerEditor from "./CornerEditor.vue";
 import Icon from "./Icon.vue";
-import type { Mode, Quad } from "../lib/cv";
+import type { Quad } from "../lib/cv";
+import { click, tap } from "../lib/haptics";
 import { canvasFor, containFit } from "../lib/image";
-import { activePage, autoDetect, processPage, scan } from "../lib/store";
+import { activePage, autoDetect, CROP_MAX, PREVIEW_MAX, processPage, scan } from "../lib/store";
 
 const props = withDefaults(
-  defineProps<{ initialMode?: "result" | "frame"; notice?: string | null }>(),
-  { initialMode: "result", notice: null }
+  defineProps<{
+    initialMode?: "result" | "frame";
+    notice?: string | null;
+    /** Where the back chip leads, so its label tells the truth. */
+    backTo?: "camera" | "pages";
+  }>(),
+  { initialMode: "result", notice: null, backTo: "camera" }
 );
 
 const emit = defineEmits<{ (e: "back"): void; (e: "done"): void }>();
+
+/**
+ * A pass under ~150ms should not flash a spinner at the user: the spinner is
+ * for a real wait, not for a flicker.
+ */
+function showBusy() {
+  window.clearTimeout(busyTimer);
+  if (busy.value) return;
+  busyTimer = window.setTimeout(() => (busy.value = true), 130);
+}
+
+function hideBusy() {
+  window.clearTimeout(busyTimer);
+  busy.value = false;
+}
+
+/** Breathing room around the page, in CSS pixels — must match .editor-stage. */
+const STAGE_PAD = 40;
 
 const page = computed(() => activePage());
 const mode = ref<"result" | "frame">(props.initialMode);
 const notice = ref<string | null>(props.notice);
 let noticeTimer = 0;
 const busy = ref(false);
+let busyTimer = 0;
+/** The canvas just changed under the user: a 200ms dip says "this is new". */
+const swapping = ref(false);
+let swapTimer = 0;
 const stage = ref<HTMLDivElement | null>(null);
 const resultCanvas = ref<HTMLCanvasElement | null>(null);
 const pageIndex = computed(() => scan.pages.findIndex((p) => p.id === scan.activeId) + 1);
-
-const modes: { id: Mode; label: string; short: string; hint: string }[] = [
-  { id: "bw", label: "Black & white", short: "B/W", hint: "Crisp text on clean white paper" },
-  { id: "gray", label: "Soft grey", short: "Grey", hint: "Keeps shading, gentler on photos" },
-  { id: "color", label: "Original colour", short: "Colour", hint: "Stamps, highlighting and logos" },
-];
+const optimizing = computed(() => page.value?.opts.optimize ?? true);
 
 let observer: ResizeObserver | null = null;
+let drawFrame = 0;
+let resizeTimer = 0;
+/** Long side of the render the canvas is showing right now. */
+let renderedSide = 0;
+/** The crop changed but has not been rendered yet. */
+let cropDirty = false;
+/** Bumped per reprocess so a slower, older pass cannot overwrite a newer one. */
+let generation = 0;
 
 /* -------------------------------------------------------------- result view */
 
@@ -42,9 +73,16 @@ function drawResult() {
   const pad = 26;
   if (!rect.width || !rect.height) return;
 
-  const fit = containFit(img.width, img.height, Math.max(40, rect.width - pad), Math.max(40, rect.height - pad));
+  const fit = containFit(
+    img.width,
+    img.height,
+    Math.max(40, rect.width - pad),
+    Math.max(40, rect.height - pad)
+  );
   const cssW = Math.max(1, Math.round(img.width * fit.scale));
   const cssH = Math.max(1, Math.round(img.height * fit.scale));
+  // 2x is plenty for a page that is never wider than the screen; 3x triples
+  // the canvas memory for a difference nobody can see
   const dpr = Math.min(2, window.devicePixelRatio || 1);
 
   el.style.width = `${cssW}px`;
@@ -61,65 +99,148 @@ function drawResult() {
   ctx.drawImage(canvasFor(img), 0, 0, cssW, cssH);
 }
 
-async function reprocess(options: { rewriteWarp?: boolean } = {}) {
+function queueDraw() {
+  if (drawFrame) return;
+  drawFrame = requestAnimationFrame(() => {
+    drawFrame = 0;
+    if (mode.value === "result") drawResult();
+  });
+}
+
+/**
+ * How many pixels the page actually needs.
+ *
+ * The editor never zooms, so rendering at 2400px to show a 380px-wide page was
+ * nine times the work for a difference no one can see — and it made the
+ * Optimize switch feel sluggish. Render at the size of the glass instead, with
+ * a little headroom for odd pixel ratios. Exports re-render at full size anyway.
+ */
+function neededSide(): number {
+  const host = stage.value;
+  if (!host) return PREVIEW_MAX;
+  const rect = host.getBoundingClientRect();
+  if (!rect.width || !rect.height) return PREVIEW_MAX;
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const long = Math.max(28, Math.max(rect.width, rect.height) - STAGE_PAD);
+  return Math.round(Math.min(PREVIEW_MAX, Math.max(720, long * dpr * 1.04)));
+}
+
+/**
+ * One reprocess at a time. `busy` is what the little spinner shows, and the
+ * generation counter makes sure a fast toggle back does not end up displaying
+ * the slower pass that started earlier.
+ */
+async function reprocess(options: { rewriteWarp?: boolean; maxSide?: number; full?: boolean } = {}) {
   const current = page.value;
   if (!current) return;
-  busy.value = true;
+  const mine = ++generation;
+  showBusy();
   try {
-    await processPage(current, { full: true, rewriteWarp: options.rewriteWarp });
+    const maxSide = options.maxSide ?? neededSide();
+    await processPage(current, {
+      full: options.full ?? true,
+      rewriteWarp: options.rewriteWarp,
+      maxSide,
+    });
+    if (mine !== generation) return;
+    renderedSide = maxSide;
     await nextTick();
-    drawResult();
+    queueDraw();
   } finally {
-    busy.value = false;
+    if (mine === generation) hideBusy();
   }
 }
 
-function setMode(next: Mode) {
+async function setOptimize(next: boolean) {
   const current = page.value;
-  if (!current || current.opts.mode === next) return;
-  current.opts.mode = next;
-  void reprocess();
+  if (!current || current.opts.optimize === next) return;
+  click();
+  current.opts.optimize = next;
+  await reprocess({});
+  swapping.value = true;
+  window.clearTimeout(swapTimer);
+  swapTimer = window.setTimeout(() => (swapping.value = false), 220);
+}
+
+async function toggleOptimize() {
+  await setOptimize(!optimizing.value);
 }
 
 function toggleFrame() {
+  tap();
   mode.value = mode.value === "result" ? "frame" : "result";
-  if (mode.value === "result") {
-    void nextTick(drawResult);
+  if (mode.value === "frame") {
+    // the corner tool works on the photo; nothing to render yet
+    notice.value = null;
+  } else {
+    // leaving the crop tool: this is the one pass that has to be on screen
+    void reprocess({ rewriteWarp: true })
+      .then(() => (cropDirty = false))
+      .catch(() => undefined);
   }
 }
 
+/**
+ * Dragging a corner must not cost a warp per finger lift. The result canvas is
+ * hidden while the frame tool is open, so the work is deferred until the user
+ * leaves the tool — one pass instead of one per gesture.
+ */
 function onQuad(next: Quad) {
   const current = page.value;
   if (!current) return;
   current.quad = next;
   current.warped = null;
+  current.warpedSide = 0;
+  current.cacheKey = "";
+  cropDirty = true;
 }
 
-async function onCommit() {
-  await reprocess({ rewriteWarp: true });
+/**
+ * Catching up after the crop tool: the grid, the filmstrip and the export all
+ * read the page, not this component, so leaving mid-crop must not leave a stale
+ * thumbnail behind. Rendered small and in the background — the user has already
+ * moved on.
+ */
+function refreshQuietly() {
+  const current = page.value;
+  if (!current || !cropDirty) return;
+  cropDirty = false;
+  void processPage(current, { full: true, rewriteWarp: true, maxSide: neededSide() })
+    .then(queueDraw)
+    .catch(() => undefined);
+}
+
+function finish() {
+  tap();
+  refreshQuietly();
+  emit("done");
+}
+
+function onCommit() {
+  /* intentionally empty: see onQuad */
 }
 
 async function runAuto() {
   const current = page.value;
   if (!current) return;
-  busy.value = true;
+  showBusy();
   try {
     const found = autoDetect(current);
-    await processPage(current, { full: true, rewriteWarp: true });
-    await nextTick();
-    if (!found) {
+    if (found) {
+      await reprocess({ rewriteWarp: true, maxSide: CROP_MAX, full: false });
       mode.value = "frame";
+      notice.value = "Page found — drag a corner to adjust";
     } else {
-      drawResult();
+      notice.value = "No page edge found — drag the corners";
     }
   } finally {
-    busy.value = false;
+    hideBusy();
   }
 }
 
 watch(
   () => page.value?.result,
-  () => nextTick(drawResult)
+  () => queueDraw()
 );
 
 watch(
@@ -137,19 +258,34 @@ watch(
   async () => {
     mode.value = "result";
     if (!page.value?.result) await reprocess({ rewriteWarp: true });
-    else await nextTick(drawResult);
+    else await nextTick(queueDraw);
   }
 );
 
 onMounted(async () => {
   observer = new ResizeObserver(() => {
-    if (mode.value === "result") drawResult();
+    queueDraw();
+    // a real resize (rotation, desktop window) can change how many pixels the
+    // page deserves; re-render once the user has stopped dragging
+    window.clearTimeout(resizeTimer);
+    resizeTimer = window.setTimeout(() => {
+      const want = neededSide();
+      if (renderedSide && Math.abs(want - renderedSide) / renderedSide > 0.18) {
+        void reprocess({ full: false });
+      }
+    }, 260);
   });
   if (stage.value) observer.observe(stage.value);
-  if (page.value && !page.value.result) {
-    await reprocess({ rewriteWarp: true });
+  await nextTick();
+  const current = page.value;
+  const want = neededSide();
+  // an existing render at *or above* what the screen needs is good enough: a
+  // 1400px preview on a 1250px stage is not worth re-warping
+  if (current && (!current.result || current.warpedSide < want * 0.92)) {
+    await reprocess({ rewriteWarp: !current.warped, maxSide: want });
   } else {
-    await nextTick(drawResult);
+    renderedSide = current?.warpedSide ?? 0;
+    queueDraw();
   }
   if (props.notice) {
     window.clearTimeout(noticeTimer);
@@ -158,7 +294,12 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  window.clearTimeout(swapTimer);
+  refreshQuietly();
   observer?.disconnect();
+  window.clearTimeout(resizeTimer);
+  window.clearTimeout(busyTimer);
+  if (drawFrame) cancelAnimationFrame(drawFrame);
   window.clearTimeout(noticeTimer);
 });
 
@@ -168,12 +309,20 @@ defineExpose({ openFrame: () => (mode.value = "frame") });
 <template>
   <div class="editor" v-if="page">
     <header class="editor-top">
-      <button class="control" aria-label="Back to camera" @click="emit('back')">
+      <button
+        class="control"
+        :aria-label="props.backTo === 'pages' ? 'Back to pages' : 'Back to camera'"
+        @click="emit('back')"
+      >
         <Icon name="back" :size="19" />
         <span>Back</span>
       </button>
 
-      <div class="editor-count" aria-live="polite">
+      <div
+        class="editor-count"
+        aria-live="polite"
+        :aria-label="`Page ${pageIndex} of ${scan.pages.length}`"
+      >
         {{ pageIndex }}<span>/{{ scan.pages.length }}</span>
       </div>
 
@@ -190,7 +339,12 @@ defineExpose({ openFrame: () => (mode.value = "frame") });
     </header>
 
     <div class="editor-stage" ref="stage">
-      <canvas v-show="mode === 'result'" ref="resultCanvas" class="paper-canvas" />
+      <canvas
+        v-show="mode === 'result'"
+        ref="resultCanvas"
+        class="paper-canvas"
+        :class="{ swapping }"
+      />
 
       <CornerEditor
         v-if="mode === 'frame'"
@@ -200,14 +354,14 @@ defineExpose({ openFrame: () => (mode.value = "frame") });
         @commit="onCommit"
       />
 
-      <p v-if="mode === 'frame'" class="frame-hint">
+      <p v-if="mode === 'frame'" class="frame-hint" role="status">
         {{ notice ?? "Drag a corner to adjust" }}
       </p>
-      <p v-else-if="notice" class="frame-hint">{{ notice }}</p>
+      <p v-else-if="notice" class="frame-hint" role="status">{{ notice }}</p>
 
       <button v-if="mode === 'frame'" class="auto-pill" @click="runAuto">
         <Icon name="auto" :size="18" />
-        <span>Detect page</span>
+        <span>Find the page</span>
       </button>
 
       <Transition name="fade">
@@ -218,22 +372,24 @@ defineExpose({ openFrame: () => (mode.value = "frame") });
     </div>
 
     <footer class="editor-dock">
-      <div class="looks" role="group" aria-label="Look">
-        <button
-          v-for="m in modes"
-          :key="m.id"
-          class="look"
-          :class="[m.id, { active: page.opts.mode === m.id }]"
-          :aria-pressed="page.opts.mode === m.id"
-          :aria-label="m.label"
-          :title="m.hint"
-          @click="setMode(m.id)"
-        >
-          <span class="look-label">{{ m.short }}</span>
-        </button>
-      </div>
+      <button
+        class="optimize"
+        :class="{ on: optimizing }"
+        :aria-pressed="optimizing"
+        aria-label="Optimize this page"
+        @click="toggleOptimize"
+      >
+        <span class="optimize-icon" aria-hidden="true">
+          <Icon name="sparkle" :size="20" :stroke="1.9" />
+        </span>
+        <span class="optimize-text">
+          <strong>Optimize</strong>
+          <small>{{ optimizing ? "On · crisp text" : "Off · untouched" }}</small>
+        </span>
+        <span class="optimize-switch" aria-hidden="true"><span /></span>
+      </button>
 
-      <button class="done" aria-label="Done with this page" @click="emit('done')">
+      <button class="done" aria-label="Done with this page" @click="finish">
         <Icon name="check" :size="20" :stroke="2.4" />
         <span>Done</span>
       </button>

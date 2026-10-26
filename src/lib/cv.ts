@@ -215,6 +215,8 @@ type Candidate = {
   /** Share of the image covered by the quad. */
   area: number;
   source: "mask" | "edges";
+  /** The brightness the mask was built with, for mask candidates. */
+  thr?: number;
 };
 
 /* ----------------------------------------------------------------- scoring */
@@ -227,6 +229,38 @@ function quadArea(quad: Quad): number {
     sum += a.x * b.y - b.x * a.y;
   }
   return Math.abs(sum) / 2;
+}
+
+/** How much two quads cover the same area (0..1). */
+function quadIoU(a: Quad, b: Quad): number {
+  // rasterise coarsely: exact polygon clipping is overkill for a sanity check
+  const steps = 24;
+  let both = 0;
+  let either = 0;
+  const inside = (q: Quad, x: number, y: number) => {
+    let hit = false;
+    for (let i = 0, j = 3; i < 4; j = i++) {
+      const p = q[i];
+      const r = q[j];
+      if (p.y > y !== r.y > y && x < ((r.x - p.x) * (y - p.y)) / (r.y - p.y) + p.x) hit = !hit;
+    }
+    return hit;
+  };
+  const minX = Math.min(...a.map((p) => p.x), ...b.map((p) => p.x));
+  const maxX = Math.max(...a.map((p) => p.x), ...b.map((p) => p.x));
+  const minY = Math.min(...a.map((p) => p.y), ...b.map((p) => p.y));
+  const maxY = Math.max(...a.map((p) => p.y), ...b.map((p) => p.y));
+  for (let iy = 0; iy < steps; iy++) {
+    for (let ix = 0; ix < steps; ix++) {
+      const x = minX + ((ix + 0.5) / steps) * (maxX - minX);
+      const y = minY + ((iy + 0.5) / steps) * (maxY - minY);
+      const inA = inside(a, x, y);
+      const inB = inside(b, x, y);
+      if (inA && inB) both++;
+      if (inA || inB) either++;
+    }
+  }
+  return either ? both / either : 0;
 }
 
 /** Scale a quad around its centroid. */
@@ -370,8 +404,25 @@ function plausible(quad: Quad, w: number, h: number): boolean {
   return area > 0.05 && area < 0.995;
 }
 
+/**
+ * Bright, colour-neutral pixels = the sheet. One definition, used both to find
+ * candidate blobs and to check a finished quad against the real paper.
+ */
+function paperMask(
+  g: Float32Array,
+  chroma: Float32Array,
+  warmth: Float32Array,
+  thr: number,
+  out: Uint8Array
+): Uint8Array {
+  for (let i = 0; i < g.length; i++) {
+    out[i] = g[i] > thr && chroma[i] < 62 && warmth[i] < 30 ? 1 : 0;
+  }
+  return out;
+}
+
 /** Connected bright, colour-neutral blobs → minimum-area rectangles. */
-function maskCandidates(mask: Uint8Array, w: number, h: number, out: Candidate[]): void {
+function maskCandidates(mask: Uint8Array, w: number, h: number, out: Candidate[], thr = 0): void {
   const n = w * h;
   const seen = new Uint8Array(n);
   const stack: number[] = [];
@@ -420,7 +471,7 @@ function maskCandidates(mask: Uint8Array, w: number, h: number, out: Candidate[]
     if (rectArea < 1) continue;
     const quad = orderQuad(rect);
     if (!plausible(quad, w, h)) continue;
-    out.push({ quad, fill: pts.length / rectArea, area: quadArea(quad) / n, source: "mask" });
+    out.push({ quad, fill: pts.length / rectArea, area: quadArea(quad) / n, source: "mask", thr });
   }
 }
 
@@ -554,13 +605,10 @@ export function detectPageQuad(img: ImageData, options: DetectOptions = {}): Qua
 
   for (const t of thresholds) {
     const thr = Math.max(90, Math.min(235, t));
-    const mask = new Uint8Array(n);
-    for (let i = 0; i < n; i++) {
-      mask[i] = g[i] > thr && chroma[i] < 62 && warmth[i] < 30 ? 1 : 0;
-    }
+    const mask = paperMask(g, chroma, warmth, thr, new Uint8Array(n));
     const closed = morphClose(mask, w, h, radius);
     const found: Candidate[] = [];
-    maskCandidates(closed, w, h, found);
+    maskCandidates(closed, w, h, found, thr);
     if ((globalThis as { __dbgDetect?: boolean }).__dbgDetect) {
       let on = 0;
       for (let i = 0; i < n; i++) on += closed[i];
@@ -607,6 +655,42 @@ export function detectPageQuad(img: ImageData, options: DetectOptions = {}): Qua
   }
   // the snap may move a corner a little, but never into nonsense
   if (!plausible(refined, w, h)) refined = best.quad;
+
+  // Second opinion on the winner.
+  //
+  // Morphological closing glues the sheet to whatever lies against it — a pen,
+  // a phone, a shadow — and the minimum-area rectangle then grows to swallow
+  // that neighbour. The *unclosed* mask keeps them apart, so if one blob still
+  // agrees with the winner, its rectangle is the honest one.
+  if (best.thr) {
+    const tight: Candidate[] = [];
+    maskCandidates(paperMask(g, chroma, warmth, best.thr, new Uint8Array(n)), w, h, tight, best.thr);
+    let pick: Candidate | null = null;
+    let pickOverlap = 0;
+    for (const c of tight) {
+      const overlap = quadIoU(c.quad, refined);
+      if (overlap < 0.55) continue;
+      if (overlap > pickOverlap) {
+        pick = c;
+        pickOverlap = overlap;
+      }
+    }
+
+    if (pick) {
+      let tightQuad = pick.quad;
+      for (let pass = 0; pass < 2; pass++) {
+        tightQuad = refineQuadByEdges(tightQuad, paperness, grad, w, h, window);
+      }
+      const before = quadMetrics(refined, g, chroma, grad, w, h);
+      const after = quadMetrics(tightQuad, g, chroma, grad, w, h);
+      // Only when the sheet edge is actually visible. On a white-on-white or
+      // shadowed scene the unclosed blob is a torn version of the page, and its
+      // rectangle is worse than the one the full mask produced.
+      if (plausible(tightQuad, w, h) && before.edge >= 95 && after.edge >= before.edge * 0.8) {
+        refined = tightQuad;
+      }
+    }
+  }
 
   // keep the paper edge out of the crop: a hair of white margin reads as
   // "scanned", a dark 1px rim reads as "photo"
@@ -989,17 +1073,38 @@ export type EnhanceOpts = {
   strength?: number;
 };
 
-/* The pipeline below runs at whatever resolution the caller asks for — up to
- * 3200px on the long side for export. Every buffer it allocates is therefore
- * size-sensitive: statistics are computed on a small map and sampled back up,
- * instead of building full-resolution integral tables (which cost ~8 bytes per
- * pixel per channel and are what makes a phone tab die). */
+/* Everything below runs at the caller's resolution — up to 3000px on the long
+ * side for an export. The rules that make it fast:
+ *
+ *  1. statistics come from a small copy, never from the full image;
+ *  2. every spatially varying map (light, threshold) is sampled through a
+ *     precomputed row sampler, so a pixel costs a few array reads instead of a
+ *     bilinear interpolation with four clamps;
+ *  3. tone mapping is a 256-entry lookup table, so per pixel it is one multiply
+ *     and one table read;
+ *  4. buffers are bytes, reused, and written once.
+ */
 
-/** Area-average downsample of a luma plane. */
-function shrinkLuma(gray: Float32Array, w: number, h: number, maxSide: number) {
+/** Luma in a byte plane: half the memory of Float32 and enough for 8-bit out. */
+function lumaBytes(
+  src: Uint8ClampedArray,
+  w: number,
+  h: number,
+  into?: Uint8Array
+): Uint8Array {
+  const out = into ?? new Uint8Array(w * h);
+  for (let i = 0, p = 0; i < out.length; i++, p += 4) {
+    out[i] = (src[p] * 77 + src[p + 1] * 150 + src[p + 2] * 29) >> 8;
+  }
+  return out;
+}
+
+/** Area-average downsample of a byte plane. */
+function shrink(src: Uint8Array | Float32Array, w: number, h: number, maxSide: number) {
   const s = Math.min(1, maxSide / Math.max(w, h));
   const mw = Math.max(8, Math.round(w * s));
   const mh = Math.max(8, Math.round(h * s));
+  if (mw === w && mh === h) return { map: Float32Array.from(src), w: mw, h: mh };
   const out = new Float32Array(mw * mh);
   const sx = w / mw;
   const sy = h / mh;
@@ -1012,7 +1117,7 @@ function shrinkLuma(gray: Float32Array, w: number, h: number, maxSide: number) {
       let acc = 0;
       for (let yy = y0; yy < y1; yy++) {
         const base = yy * w;
-        for (let xx = x0; xx < x1; xx++) acc += gray[base + xx];
+        for (let xx = x0; xx < x1; xx++) acc += src[base + xx];
       }
       out[y * mw + x] = acc / ((y1 - y0) * (x1 - x0));
     }
@@ -1020,8 +1125,8 @@ function shrinkLuma(gray: Float32Array, w: number, h: number, maxSide: number) {
   return { map: out, w: mw, h: mh };
 }
 
-/** Separable box blur, radius in pixels of the (small) map. */
-function blurMap(src: Float32Array, w: number, h: number, radius: number): Float32Array {
+/** Separable box blur on a small float map. */
+function blur(src: Float32Array | Uint8Array, w: number, h: number, radius: number): Float32Array {
   const r = Math.max(1, Math.round(radius));
   const tmp = new Float32Array(w * h);
   const out = new Float32Array(w * h);
@@ -1046,39 +1151,46 @@ function blurMap(src: Float32Array, w: number, h: number, radius: number): Float
   return out;
 }
 
-/** Bilinear read from a small map, in full-resolution coordinates. */
-function sampleMap(
-  map: Float32Array,
-  mw: number,
-  mh: number,
-  x: number,
-  y: number,
-  w: number,
-  h: number
-): number {
-  const fx = clamp(((x + 0.5) * mw) / w - 0.5, 0, mw - 1);
-  const fy = clamp(((y + 0.5) * mh) / h - 0.5, 0, mh - 1);
-  const x0 = Math.floor(fx);
-  const y0 = Math.floor(fy);
-  const x1 = Math.min(mw - 1, x0 + 1);
-  const y1 = Math.min(mh - 1, y0 + 1);
-  const tx = fx - x0;
-  const ty = fy - y0;
-  const a = map[y0 * mw + x0];
-  const b = map[y0 * mw + x1];
-  const c = map[y1 * mw + x0];
-  const d = map[y1 * mw + x1];
-  return a + (b - a) * tx + (c - a) * ty + (a - b - c + d) * tx * ty;
+/**
+ * Bilinear upsampler from a small map to full resolution. The horizontal weights
+ * are computed once; reading a row is then a handful of array lookups per pixel.
+ */
+function rowSampler(map: Float32Array, mw: number, mh: number, w: number, h: number) {
+  const x0 = new Int32Array(w);
+  const x1 = new Int32Array(w);
+  const tx = new Float32Array(w);
+  for (let x = 0; x < w; x++) {
+    const fx = clamp(((x + 0.5) * mw) / w - 0.5, 0, mw - 1);
+    const i0 = Math.floor(fx);
+    x0[x] = i0;
+    x1[x] = Math.min(mw - 1, i0 + 1);
+    tx[x] = fx - i0;
+  }
+  return (y: number, out: Float32Array) => {
+    const fy = clamp(((y + 0.5) * mh) / h - 0.5, 0, mh - 1);
+    const r0 = Math.floor(fy);
+    const r1 = Math.min(mh - 1, r0 + 1);
+    const ty = fy - r0;
+    const a = r0 * mw;
+    const b = r1 * mw;
+    for (let x = 0; x < w; x++) {
+      const i0 = x0[x];
+      const i1 = x1[x];
+      const t = tx[x];
+      const av = map[a + i0] + (map[a + i1] - map[a + i0]) * t;
+      const bv = map[b + i0] + (map[b + i1] - map[b + i0]) * t;
+      out[x] = av + (bv - av) * ty;
+    }
+  };
 }
 
-const HIST = (g: Float32Array) => {
+function histOf(plane: Uint8Array | Float32Array, length = plane.length): Uint32Array {
   const hist = new Uint32Array(256);
-  for (let i = 0; i < g.length; i++) hist[clamp(Math.round(g[i]), 0, 255)]++;
+  for (let i = 0; i < length; i++) hist[clamp(Math.round(plane[i]), 0, 255)]++;
   return hist;
-};
+}
 
-/** Value at `p` of the histogram, in 0..255. */
-function histPercentile(hist: Uint32Array, total: number, p: number): number {
+function percentileOf(hist: Uint32Array, total: number, p: number): number {
   const target = total * p;
   let acc = 0;
   for (let v = 0; v < 256; v++) {
@@ -1089,220 +1201,246 @@ function histPercentile(hist: Uint32Array, total: number, p: number): number {
 }
 
 /**
- * Illumination correction.
+ * Lighting map: the page as the camera lit it, heavily blurred.
  *
- * A phone photo of a page is paper multiplied by the light falling on it — and
- * that light is never even (a hand casts a shadow, a lamp makes one corner
- * bright). Estimating the light as a heavy blur and dividing it out flattens
- * the page *without* touching the ink, which is what makes the old output look
- * dirty: shadows were being fought by the threshold alone.
- *
- * Returns the normalised luma (in place is not possible: the caller keeps the
- * original for the colour path) plus the small gain map used for the channels.
+ * Dividing it out is what turns "a photo of paper with a shadow" into "paper".
+ * The target is the 75th percentile of the lighting map, so a normally lit page
+ * keeps its white and a dim one is lifted to it.
  */
-function normalise(gray: Float32Array, w: number, h: number) {
-  const small = shrinkLuma(gray, w, h, 320);
-  const light = blurMap(small.map, small.w, small.h, Math.max(4, Math.round(Math.max(small.w, small.h) / 12)));
-  const hist = HIST(light);
-  const target = Math.max(90, histPercentile(hist, light.length, 0.75));
-  const gainOf = (bg: number) => (bg < 12 ? 1 : clamp(target / bg, 0.55, 2.6));
-  // in place: `gray` is not needed afterwards, and at 3000px a second float
-  // plane costs 36MB for nothing
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const i = y * w + x;
-      // never boost a near-black background: that amplifies noise in the shadows
-      gray[i] = clamp(gray[i] * gainOf(sampleMap(light, small.w, small.h, x, y, w, h)), 0, 255);
-    }
-  }
-  return {
-    norm: gray,
-    gainAt: (x: number, y: number) => gainOf(sampleMap(light, small.w, small.h, x, y, w, h)),
-  };
+function lighting(gray: Uint8Array, w: number, h: number) {
+  const small = shrink(gray, w, h, 320);
+  const light = blur(small.map, small.w, small.h, Math.max(4, Math.round(Math.max(small.w, small.h) / 12)));
+  const hist = histOf(light);
+  const target = Math.max(96, percentileOf(hist, light.length, 0.75));
+  return { light, lw: small.w, lh: small.h, target };
 }
 
 /**
- * Unsharp mask on a float plane; `amount` around 0.5–0.9.
- * Uses three rolling rows instead of a second full image: at export resolution
- * that saved copy would be another 36MB.
+ * Unsharp mask on a byte plane, separable, rolling rows.
+ *
+ * Text is high-frequency; the sharpen has to happen *before* the threshold so
+ * glyph edges reach it crisp, which is what makes small print readable instead
+ * of grey mush.
  */
-function unsharp(plane: Float32Array, w: number, h: number, amount: number): void {
-  const rowBlur = (plane: Float32Array, y: number, out: Float32Array) => {
+function sharpen(plane: Uint8Array, w: number, h: number, amount: number): Uint8Array {
+  const out = new Uint8Array(w * h);
+  const rowBlur = (y: number, into: Int16Array) => {
     const row = y * w;
     for (let x = 0; x < w; x++) {
-      const l = plane[row + Math.max(0, x - 1)];
+      const l = plane[row + (x > 0 ? x - 1 : x)];
       const c = plane[row + x];
-      const r = plane[row + Math.min(w - 1, x + 1)];
-      out[x] = (l + 2 * c + r) / 4;
+      const r = plane[row + (x < w - 1 ? x + 1 : x)];
+      into[x] = (l + 2 * c + r) >> 2;
     }
   };
-  const prev = new Float32Array(w);
-  const curr = new Float32Array(w);
-  const next = new Float32Array(w);
-  const outRow = new Float32Array(w);
-  rowBlur(plane, 0, curr);
-  rowBlur(plane, Math.min(1, h - 1), next);
+  const prev = new Int16Array(w);
+  const curr = new Int16Array(w);
+  const next = new Int16Array(w);
+  rowBlur(0, curr);
+  rowBlur(h > 1 ? 1 : 0, next);
   for (let y = 0; y < h; y++) {
     if (y > 0) {
       prev.set(curr);
       curr.set(next);
-      rowBlur(plane, Math.min(h - 1, y + 1), next);
+      rowBlur(Math.min(h - 1, y + 1), next);
     }
     const row = y * w;
     for (let x = 0; x < w; x++) {
-      const b = (prev[x] + 2 * curr[x] + next[x]) / 4;
-      outRow[x] = clamp(plane[row + x] + (plane[row + x] - b) * amount, 0, 255);
+      const v = plane[row + x];
+      const b = (prev[x] + 2 * curr[x] + next[x]) >> 2;
+      const sharp = v + ((v - b) * amount) | 0;
+      out[row + x] = sharp < 0 ? 0 : sharp > 255 ? 255 : sharp;
     }
-    plane.set(outRow, row);
   }
+  return out;
 }
 
-/** Soft Sauvola threshold map, computed small and sampled back up. */
-function thresholdMap(norm: Float32Array, w: number, h: number, strength: number) {
-  const small = shrinkLuma(norm, w, h, 1100);
+/**
+ * Adaptive threshold, Sauvola on a small copy.
+ *
+ * The window is tied to the page size rather than to the output resolution, so a
+ * 1200px preview and a 3000px export agree about what a letter is.
+ */
+function thresholdMap(plane: Uint8Array | Float32Array, w: number, h: number, strength: number) {
+  const small = shrink(plane, w, h, 1100);
   const { map: g, w: mw, h: mh } = small;
-  const k = 0.04 + (clamp(strength, 0, 100) / 100) * 0.34;
+  const k = 0.03 + (clamp(strength, 0, 100) / 100) * 0.32;
   const R = 128;
-  // window ~ one text line; fixed in *page* pixels so a 3200px export and a
-  // 1200px preview behave the same
-  const radius = Math.max(6, Math.round(Math.min(mw, mh) / 34));
-  const mean = blurMap(g, mw, mh, radius);
+  const radius = Math.max(5, Math.round(Math.min(mw, mh) / 40));
+  const mean = blur(g, mw, mh, radius);
   const sq = new Float32Array(g.length);
   for (let i = 0; i < g.length; i++) sq[i] = g[i] * g[i];
-  const meanSq = blurMap(sq, mw, mh, radius);
+  const meanSq = blur(sq, mw, mh, radius);
   const thr = new Float32Array(g.length);
   for (let i = 0; i < g.length; i++) {
     const m = mean[i];
     const dev = Math.sqrt(Math.max(0, meanSq[i] - m * m));
     thr[i] = m * (1 + k * (dev / R - 1));
   }
-  return { thr, w: mw, h: mh };
-}
-
-/** Robust black/white point, ignoring the extreme tails. */
-function levels(norm: Float32Array): { lo: number; hi: number } {
-  const hist = HIST(norm);
-  let lo = histPercentile(hist, norm.length, 0.02);
-  let hi = histPercentile(hist, norm.length, 0.985);
-  if (hi - lo < 24) {
-    lo = 0;
-    hi = 255;
-  }
-  return { lo, hi };
+  return { thr, tw: mw, th: mh };
 }
 
 /**
  * Turn a warped photo into a page.
  *
- * Order matters: flatten the light → stretch the levels → sharpen → threshold
- * (or not). `bw` keeps anti-aliased edges instead of a hard binary cut, because
- * a hard cut is exactly what made small text look like dirt at low resolution.
+ * `bw` is the Optimize button: flatten the light, stretch the tones, sharpen,
+ * then threshold with soft coverage so glyph edges stay smooth. `gray` and
+ * `color` keep the same lighting and tone work and skip the threshold.
  */
 export function enhance(src: ImageData, opts: EnhanceOpts): ImageData {
   const { width: w, height: h } = src;
   const out = new ImageData(w, h);
   const o = out.data;
-  const gray = toGray(src.data, w, h);
-  const { norm, gainAt } = normalise(gray, w, h);
+  const n = w * h;
+  const gray = lumaBytes(src.data, w, h);
+  const { light, lw, lh, target } = lighting(gray, w, h);
+  const lightRow = rowSampler(light, lw, lh, w, h);
   const brightness = clamp(opts.brightness ?? 0, -50, 50) / 100;
   const contrast = clamp(opts.contrast ?? 0, -50, 50) / 100;
 
-  if (opts.mode === "bw") {
-    const { lo, hi } = levels(norm);
-    // levels first, so the threshold works on a page that spans the full range
-    const span = Math.max(1, hi - lo);
-    for (let i = 0; i < norm.length; i++) {
-      const t = clamp((norm[i] - lo) / span, 0, 1);
-      norm[i] = clamp(t + (t - 0.5) * contrast, 0, 1) * 255;
+  /* Tone curve: levels from the *lit* page itself, then contrast and
+   * brightness, baked into a table. One multiply and one lookup per pixel
+   * afterwards.
+   *
+   * The histogram is taken from the lit image, not from the lighting map: the
+   * map is a smooth blur of the page and has almost no range, so stretching to
+   * its 2–98% band turned a five-level shadow into a black smudge. Sampling
+   * every few pixels keeps this pass cheap. */
+  const gainOf = (bg: number) => (bg < 12 ? 1 : clamp(target / bg, 0.55, 2.6));
+  const gainRow = new Float32Array(w);
+  const sampleStep = Math.max(1, Math.floor(Math.sqrt(n / 40000)));
+  const hist = new Uint32Array(256);
+  let samples = 0;
+  for (let y = 0; y < h; y += sampleStep) {
+    lightRow(y, gainRow);
+    const row = y * w;
+    for (let x = 0; x < w; x += sampleStep) {
+      const v = gray[row + x] * gainOf(gainRow[x]);
+      hist[v > 255 ? 255 : v < 0 ? 0 : v | 0]++;
+      samples++;
     }
-    const { thr, w: mw, h: mh } = thresholdMap(norm, w, h, opts.strength ?? 55);
+  }
+  let lo = percentileOf(hist, samples, 0.02);
+  let hi = percentileOf(hist, samples, 0.985);
+  // a flatter page than this needs no level stretch at all
+  if (hi - lo < 24) {
+    lo = 0;
+    hi = 255;
+  }
+  const span = Math.max(1, hi - lo);
+  const lut = new Uint8Array(256);
+  for (let v = 0; v < 256; v++) {
+    let t = clamp((v - lo) / span, 0, 1);
+    if (contrast !== 0) {
+      // gentle S-curve rather than a hard clip
+      const s = t * t * (3 - 2 * t);
+      t = clamp(t + (s - t) * contrast * 1.2 + (t - 0.5) * contrast * 0.6, 0, 1);
+    }
+    const x = clamp(t + brightness * 0.5, 0, 1);
+    lut[v] = Math.round(x * 255);
+  }
 
-    // coverage: how much ink is in this pixel, 0..255 — keeps glyph edges
-    // smooth instead of turning every antialiased stroke into a hard pixel.
-    // A byte per pixel, because a float plane is 4x the memory at export size.
-    const ink = new Uint8Array(w * h);
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        const i = y * w + x;
-        const t = sampleMap(thr, mw, mh, x, y, w, h);
-        const soft = Math.max(8, t * 0.22);
-        const v = clamp((t - norm[i]) / soft, 0, 1);
-        ink[i] = v > 0.62 ? 255 : v < 0.22 ? 0 : Math.round(((v - 0.22) / 0.4) * 255);
+  /* Normalise + tone in one pass. */
+  const norm = new Uint8Array(n);
+  for (let y = 0; y < h; y++) {
+    lightRow(y, gainRow);
+    const row = y * w;
+    for (let x = 0; x < w; x++) {
+      const g = gainOf(gainRow[x]);
+      let v = gray[row + x] * g + 0.5;
+      norm[row + x] = lut[v > 255 ? 255 : v < 0 ? 0 : v | 0];
+    }
+  }
+
+  if (opts.mode !== "bw") {
+    const sharp = sharpen(norm, w, h, 0.61);
+    if (opts.mode === "gray") {
+      for (let i = 0, p = 0; i < n; i++, p += 4) {
+        const v = sharp[i];
+        o[p] = v;
+        o[p + 1] = v;
+        o[p + 2] = v;
+        o[p + 3] = 255;
       }
+      return out;
     }
-
-    // despeckle: a lone dark pixel is grain, never a glyph
-    const clean = ink;
-    for (let y = 1; y < h - 1; y++) {
-      for (let x = 1; x < w - 1; x++) {
-        const i = y * w + x;
-        if (clean[i] < 140) continue;
-        const n =
-          (clean[i - 1] > 140 ? 1 : 0) +
-          (clean[i + 1] > 140 ? 1 : 0) +
-          (clean[i - w] > 140 ? 1 : 0) +
-          (clean[i + w] > 140 ? 1 : 0);
-        if (n === 0) clean[i] = 0;
-      }
-    }
-
+    // colour: lift every channel by the light gain, then keep a little saturation
     for (let y = 0; y < h; y++) {
+      lightRow(y, gainRow);
+      const row = y * w;
       for (let x = 0; x < w; x++) {
-        const i = y * w + x;
-        const cover = clean[i] / 255;
-        let v = 255 * (1 - cover);
-        if (brightness > 0) v = clamp(v + brightness * 34 * cover, 0, 255);
-        else if (brightness < 0) v = clamp(v - brightness * 34 * (1 - cover), 0, 255);
-        const idx = i * 4;
-        o[idx] = v;
-        o[idx + 1] = v;
-        o[idx + 2] = v;
-        o[idx + 3] = 255;
+        const i = row + x;
+        const p = i * 4;
+        const g = gainOf(gainRow[x]);
+        const delta = sharp[i] - clamp(Math.round(gray[i] * g), 0, 255);
+        let r = clamp(src.data[p] * g + delta, 0, 255);
+        let gg = clamp(src.data[p + 1] * g + delta, 0, 255);
+        let b = clamp(src.data[p + 2] * g + delta, 0, 255);
+        const luma = 0.299 * r + 0.587 * gg + 0.114 * b;
+        r = clamp(luma + (r - luma) * 1.06, 0, 255);
+        gg = clamp(luma + (gg - luma) * 1.06, 0, 255);
+        b = clamp(luma + (b - luma) * 1.06, 0, 255);
+        o[p] = r;
+        o[p + 1] = gg;
+        o[p + 2] = b;
+        o[p + 3] = 255;
       }
     }
     return out;
   }
 
-  const { lo, hi } = levels(norm);
-  const span = Math.max(1, hi - lo);
-  for (let i = 0; i < norm.length; i++) {
-    const t = clamp((norm[i] - lo) / span, 0, 1);
-    // gentle S-curve: contrast without crushing the highlights paper lives in
-    const s = t * t * (3 - 2 * t);
-    const mixed = t + (s - t) * 0.55;
-    norm[i] = clamp(mixed + (t - 0.5) * contrast * 0.6 + brightness, 0, 1) * 255;
-  }
-  unsharp(norm, w, h, opts.mode === "gray" ? 0.65 : 0.5);
-
+  /* Optimize: smooth, threshold softly, clean the specks, write black on white.
+   *
+   * Smooth *before* the threshold, not sharpen: sensor grain and JPEG noise are
+   * exactly what a local threshold turns into black dots sprinkled over the
+   * page, and no threshold can tell that grain from a full stop. A 3×3 box is
+   * narrower than any glyph stroke, so nothing real is lost — and it is cheaper
+   * than the sharpening pass it replaces. */
+  const smooth = blur(norm, w, h, 1);
+  const { thr, tw, th } = thresholdMap(smooth, w, h, opts.strength ?? 55);
+  const thrRow = rowSampler(thr, tw, th, w, h);
+  const ink = new Uint8Array(n);
+  const thrRowBuf = new Float32Array(w);
   for (let y = 0; y < h; y++) {
+    thrRow(y, thrRowBuf);
+    const row = y * w;
     for (let x = 0; x < w; x++) {
-      const i = y * w + x;
-      const idx = i * 4;
-      if (opts.mode === "gray") {
-        const v = clamp(norm[i], 0, 255);
-        o[idx] = v;
-        o[idx + 1] = v;
-        o[idx + 2] = v;
-      } else {
-        // colour: same illumination, applied equally to every channel so the
-        // page goes white while the ink keeps its hue
-        const gain = gainAt(x, y);
-        // the original luma, recomputed: `gray` now holds the normalised plane
-        const base = 0.299 * src.data[idx] + 0.587 * src.data[idx + 1] + 0.114 * src.data[idx + 2];
-        const delta = norm[i] - clamp(base, 0, 255);
-        let r = clamp(src.data[idx] * gain + delta, 0, 255);
-        let g = clamp(src.data[idx + 1] * gain + delta, 0, 255);
-        let b = clamp(src.data[idx + 2] * gain + delta, 0, 255);
-        // a little life: pull colour away from its own grey by ~8%
-        const luma = 0.299 * r + 0.587 * g + 0.114 * b;
-        r = clamp(luma + (r - luma) * 1.08, 0, 255);
-        g = clamp(luma + (g - luma) * 1.08, 0, 255);
-        b = clamp(luma + (b - luma) * 1.08, 0, 255);
-        o[idx] = r;
-        o[idx + 1] = g;
-        o[idx + 2] = b;
+      const i = row + x;
+      const t = thrRowBuf[x];
+      const soft = t * 0.22 + 8;
+      const v = (t - smooth[i]) / soft;
+      let cover = v >= 0.62 ? 255 : v <= 0.18 ? 0 : ((v - 0.18) / 0.44) * 255;
+      // Absolute white point. In an empty part of the page the local window has
+      // nothing but paper, so its deviation is tiny and soft shading lands just
+      // under the threshold — as grey smudges in the middle of a blank sheet.
+      // Anything this bright is paper, whatever the local statistics say.
+      if (smooth[i] >= 200) cover = 0;
+      ink[i] = cover;
+    }
+  }
+
+  /* Despeckle and expand to RGBA in one pass: a lone dark pixel is grain, never
+     a glyph, so it must not survive as a black dot on white paper. */
+  for (let y = 0; y < h; y++) {
+    const row = y * w;
+    const up = y > 0 ? row - w : row;
+    const down = y < h - 1 ? row + w : row;
+    for (let x = 0; x < w; x++) {
+      const i = row + x;
+      let cover = ink[i];
+      if (cover > 140) {
+        const n0 = ink[i > row ? i - 1 : i];
+        const n1 = ink[i < row + w - 1 ? i + 1 : i];
+        const n2 = ink[up + x];
+        const n3 = ink[down + x];
+        if (n0 <= 140 && n1 <= 140 && n2 <= 140 && n3 <= 140) cover = 0;
       }
-      o[idx + 3] = 255;
+      const v = 255 - cover;
+      const p = i * 4;
+      o[p] = v;
+      o[p + 1] = v;
+      o[p + 2] = v;
+      o[p + 3] = 255;
     }
   }
   return out;
