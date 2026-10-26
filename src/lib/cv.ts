@@ -215,6 +215,8 @@ type Candidate = {
   /** Share of the image covered by the quad. */
   area: number;
   source: "mask" | "edges";
+  /** The brightness the mask was built with, for mask candidates. */
+  thr?: number;
 };
 
 /* ----------------------------------------------------------------- scoring */
@@ -227,6 +229,38 @@ function quadArea(quad: Quad): number {
     sum += a.x * b.y - b.x * a.y;
   }
   return Math.abs(sum) / 2;
+}
+
+/** How much two quads cover the same area (0..1). */
+function quadIoU(a: Quad, b: Quad): number {
+  // rasterise coarsely: exact polygon clipping is overkill for a sanity check
+  const steps = 24;
+  let both = 0;
+  let either = 0;
+  const inside = (q: Quad, x: number, y: number) => {
+    let hit = false;
+    for (let i = 0, j = 3; i < 4; j = i++) {
+      const p = q[i];
+      const r = q[j];
+      if (p.y > y !== r.y > y && x < ((r.x - p.x) * (y - p.y)) / (r.y - p.y) + p.x) hit = !hit;
+    }
+    return hit;
+  };
+  const minX = Math.min(...a.map((p) => p.x), ...b.map((p) => p.x));
+  const maxX = Math.max(...a.map((p) => p.x), ...b.map((p) => p.x));
+  const minY = Math.min(...a.map((p) => p.y), ...b.map((p) => p.y));
+  const maxY = Math.max(...a.map((p) => p.y), ...b.map((p) => p.y));
+  for (let iy = 0; iy < steps; iy++) {
+    for (let ix = 0; ix < steps; ix++) {
+      const x = minX + ((ix + 0.5) / steps) * (maxX - minX);
+      const y = minY + ((iy + 0.5) / steps) * (maxY - minY);
+      const inA = inside(a, x, y);
+      const inB = inside(b, x, y);
+      if (inA && inB) both++;
+      if (inA || inB) either++;
+    }
+  }
+  return either ? both / either : 0;
 }
 
 /** Scale a quad around its centroid. */
@@ -388,7 +422,7 @@ function paperMask(
 }
 
 /** Connected bright, colour-neutral blobs → minimum-area rectangles. */
-function maskCandidates(mask: Uint8Array, w: number, h: number, out: Candidate[]): void {
+function maskCandidates(mask: Uint8Array, w: number, h: number, out: Candidate[], thr = 0): void {
   const n = w * h;
   const seen = new Uint8Array(n);
   const stack: number[] = [];
@@ -437,7 +471,7 @@ function maskCandidates(mask: Uint8Array, w: number, h: number, out: Candidate[]
     if (rectArea < 1) continue;
     const quad = orderQuad(rect);
     if (!plausible(quad, w, h)) continue;
-    out.push({ quad, fill: pts.length / rectArea, area: quadArea(quad) / n, source: "mask" });
+    out.push({ quad, fill: pts.length / rectArea, area: quadArea(quad) / n, source: "mask", thr });
   }
 }
 
@@ -574,7 +608,7 @@ export function detectPageQuad(img: ImageData, options: DetectOptions = {}): Qua
     const mask = paperMask(g, chroma, warmth, thr, new Uint8Array(n));
     const closed = morphClose(mask, w, h, radius);
     const found: Candidate[] = [];
-    maskCandidates(closed, w, h, found);
+    maskCandidates(closed, w, h, found, thr);
     if ((globalThis as { __dbgDetect?: boolean }).__dbgDetect) {
       let on = 0;
       for (let i = 0; i < n; i++) on += closed[i];
@@ -621,6 +655,42 @@ export function detectPageQuad(img: ImageData, options: DetectOptions = {}): Qua
   }
   // the snap may move a corner a little, but never into nonsense
   if (!plausible(refined, w, h)) refined = best.quad;
+
+  // Second opinion on the winner.
+  //
+  // Morphological closing glues the sheet to whatever lies against it — a pen,
+  // a phone, a shadow — and the minimum-area rectangle then grows to swallow
+  // that neighbour. The *unclosed* mask keeps them apart, so if one blob still
+  // agrees with the winner, its rectangle is the honest one.
+  if (best.thr) {
+    const tight: Candidate[] = [];
+    maskCandidates(paperMask(g, chroma, warmth, best.thr, new Uint8Array(n)), w, h, tight, best.thr);
+    let pick: Candidate | null = null;
+    let pickOverlap = 0;
+    for (const c of tight) {
+      const overlap = quadIoU(c.quad, refined);
+      if (overlap < 0.55) continue;
+      if (overlap > pickOverlap) {
+        pick = c;
+        pickOverlap = overlap;
+      }
+    }
+
+    if (pick) {
+      let tightQuad = pick.quad;
+      for (let pass = 0; pass < 2; pass++) {
+        tightQuad = refineQuadByEdges(tightQuad, paperness, grad, w, h, window);
+      }
+      const before = quadMetrics(refined, g, chroma, grad, w, h);
+      const after = quadMetrics(tightQuad, g, chroma, grad, w, h);
+      // Only when the sheet edge is actually visible. On a white-on-white or
+      // shadowed scene the unclosed blob is a torn version of the page, and its
+      // rectangle is worse than the one the full mask produced.
+      if (plausible(tightQuad, w, h) && before.edge >= 95 && after.edge >= before.edge * 0.8) {
+        refined = tightQuad;
+      }
+    }
+  }
 
   // keep the paper edge out of the crop: a hair of white margin reads as
   // "scanned", a dark 1px rim reads as "photo"
@@ -1030,7 +1100,7 @@ function lumaBytes(
 }
 
 /** Area-average downsample of a byte plane. */
-function shrink(src: Uint8Array, w: number, h: number, maxSide: number) {
+function shrink(src: Uint8Array | Float32Array, w: number, h: number, maxSide: number) {
   const s = Math.min(1, maxSide / Math.max(w, h));
   const mw = Math.max(8, Math.round(w * s));
   const mh = Math.max(8, Math.round(h * s));
@@ -1056,7 +1126,7 @@ function shrink(src: Uint8Array, w: number, h: number, maxSide: number) {
 }
 
 /** Separable box blur on a small float map. */
-function blur(src: Float32Array, w: number, h: number, radius: number): Float32Array {
+function blur(src: Float32Array | Uint8Array, w: number, h: number, radius: number): Float32Array {
   const r = Math.max(1, Math.round(radius));
   const tmp = new Float32Array(w * h);
   const out = new Float32Array(w * h);
@@ -1191,7 +1261,7 @@ function sharpen(plane: Uint8Array, w: number, h: number, amount: number): Uint8
  * The window is tied to the page size rather than to the output resolution, so a
  * 1200px preview and a 3000px export agree about what a letter is.
  */
-function thresholdMap(plane: Uint8Array, w: number, h: number, strength: number) {
+function thresholdMap(plane: Uint8Array | Float32Array, w: number, h: number, strength: number) {
   const small = shrink(plane, w, h, 1100);
   const { map: g, w: mw, h: mh } = small;
   const k = 0.03 + (clamp(strength, 0, 100) / 100) * 0.32;
@@ -1228,16 +1298,31 @@ export function enhance(src: ImageData, opts: EnhanceOpts): ImageData {
   const brightness = clamp(opts.brightness ?? 0, -50, 50) / 100;
   const contrast = clamp(opts.contrast ?? 0, -50, 50) / 100;
 
-  /* Tone curve: levels from the *lit* page, then contrast and brightness,
-   * baked into a table. One multiply and one lookup per pixel afterwards. */
+  /* Tone curve: levels from the *lit* page itself, then contrast and
+   * brightness, baked into a table. One multiply and one lookup per pixel
+   * afterwards.
+   *
+   * The histogram is taken from the lit image, not from the lighting map: the
+   * map is a smooth blur of the page and has almost no range, so stretching to
+   * its 2–98% band turned a five-level shadow into a black smudge. Sampling
+   * every few pixels keeps this pass cheap. */
   const gainOf = (bg: number) => (bg < 12 ? 1 : clamp(target / bg, 0.55, 2.6));
-  const litSmall = new Uint8Array(lw * lh);
-  for (let i = 0; i < light.length; i++) {
-    litSmall[i] = clamp(Math.round(light[i] * 1), 0, 255);
+  const gainRow = new Float32Array(w);
+  const sampleStep = Math.max(1, Math.floor(Math.sqrt(n / 40000)));
+  const hist = new Uint32Array(256);
+  let samples = 0;
+  for (let y = 0; y < h; y += sampleStep) {
+    lightRow(y, gainRow);
+    const row = y * w;
+    for (let x = 0; x < w; x += sampleStep) {
+      const v = gray[row + x] * gainOf(gainRow[x]);
+      hist[v > 255 ? 255 : v < 0 ? 0 : v | 0]++;
+      samples++;
+    }
   }
-  const lightHist = histOf(litSmall);
-  let lo = percentileOf(lightHist, litSmall.length, 0.02);
-  let hi = percentileOf(lightHist, litSmall.length, 0.985);
+  let lo = percentileOf(hist, samples, 0.02);
+  let hi = percentileOf(hist, samples, 0.985);
+  // a flatter page than this needs no level stretch at all
   if (hi - lo < 24) {
     lo = 0;
     hi = 255;
@@ -1257,7 +1342,6 @@ export function enhance(src: ImageData, opts: EnhanceOpts): ImageData {
 
   /* Normalise + tone in one pass. */
   const norm = new Uint8Array(n);
-  const gainRow = new Float32Array(w);
   for (let y = 0; y < h; y++) {
     lightRow(y, gainRow);
     const row = y * w;
@@ -1305,9 +1389,15 @@ export function enhance(src: ImageData, opts: EnhanceOpts): ImageData {
     return out;
   }
 
-  /* Optimize: sharpen, threshold softly, clean the specks, write black on white. */
-  const sharp = sharpen(norm, w, h, 0.55);
-  const { thr, tw, th } = thresholdMap(sharp, w, h, opts.strength ?? 55);
+  /* Optimize: smooth, threshold softly, clean the specks, write black on white.
+   *
+   * Smooth *before* the threshold, not sharpen: sensor grain and JPEG noise are
+   * exactly what a local threshold turns into black dots sprinkled over the
+   * page, and no threshold can tell that grain from a full stop. A 3×3 box is
+   * narrower than any glyph stroke, so nothing real is lost — and it is cheaper
+   * than the sharpening pass it replaces. */
+  const smooth = blur(norm, w, h, 1);
+  const { thr, tw, th } = thresholdMap(smooth, w, h, opts.strength ?? 55);
   const thrRow = rowSampler(thr, tw, th, w, h);
   const ink = new Uint8Array(n);
   const thrRowBuf = new Float32Array(w);
@@ -1318,8 +1408,14 @@ export function enhance(src: ImageData, opts: EnhanceOpts): ImageData {
       const i = row + x;
       const t = thrRowBuf[x];
       const soft = t * 0.22 + 8;
-      const v = (t - sharp[i]) / soft;
-      ink[i] = v >= 0.62 ? 255 : v <= 0.18 ? 0 : ((v - 0.18) / 0.44) * 255;
+      const v = (t - smooth[i]) / soft;
+      let cover = v >= 0.62 ? 255 : v <= 0.18 ? 0 : ((v - 0.18) / 0.44) * 255;
+      // Absolute white point. In an empty part of the page the local window has
+      // nothing but paper, so its deviation is tiny and soft shading lands just
+      // under the threshold — as grey smudges in the middle of a blank sheet.
+      // Anything this bright is paper, whatever the local statistics say.
+      if (smooth[i] >= 200) cover = 0;
+      ink[i] = cover;
     }
   }
 

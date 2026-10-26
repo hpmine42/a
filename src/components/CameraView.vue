@@ -349,10 +349,17 @@ function ease(current: Quad | null, next: Quad | null, t: number): Quad | null {
   })) as Quad;
 }
 
+/** Did the last frame put anything on the overlay? */
+let overlayPainted = false;
+
 function draw() {
   const canvas = overlay.value;
   const v = video.value;
   if (!canvas || !v) return;
+  // With detection off there is nothing to draw, so the loop must not clear a
+  // megapixel canvas 60 times a second for no reason — that is pure battery.
+  const painting = autoOn.value && Boolean(target.value || eased.value);
+  if (!painting && !overlayPainted) return;
   const dpr = Math.min(2, window.devicePixelRatio || 1);
   const rect = { width: canvas.clientWidth || 0, height: canvas.clientHeight || 0 };
   if (!rect.width || !rect.height) return;
@@ -366,6 +373,7 @@ function draw() {
   if (!ctx) return;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, rect.width, rect.height);
+  overlayPainted = painting;
 
   const map = coverRect();
   if (!map) return;

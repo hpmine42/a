@@ -92,8 +92,11 @@ light is never even. So `enhance()` works in this order:
 1. **Flatten the illumination** — estimate the light as a heavy blur of the
    luma, then divide it out. Shadows stop being something the threshold has to
    fight, which is what used to leave grey blotches and grey paper.
-2. **Stretch the levels** on 2%–98.5% percentiles, ignoring the tails.
-3. **Sharpen** with an unsharp mask sized for grain, not for edges.
+2. **Stretch the levels** on the 2%–98.5% percentiles of the *lit* page,
+   ignoring the tails.
+3. **Smooth** with a 3×3 box in Optimize mode — a threshold cannot tell sensor
+   grain from a full stop, so the grain goes first. (Colour mode sharpens with
+   an unsharp mask instead; there the pixels are the product.)
 4. **Threshold** (B&W) with a Sauvola map computed on a small copy and sampled
    back up — soft edges, so small type stays readable instead of turning into
    speckle.
@@ -122,8 +125,10 @@ No ML model and no WASM download — plain TypeScript in
    paper-over-desk edge. Gates on movement, gradient and paper evidence keep an
    empty desk from being reported as a document.
 
-The winner is then snapped precisely, and the result is warped with a
-homography and thresholded with Sauvola. Colour is used throughout: a pale
+The winner is then snapped precisely, checked against a second opinion from the
+*unclosed* mask (closing glues a pen or a shadow to the sheet and inflates the
+rectangle, the raw blob does not), warped with a homography and thresholded
+with Sauvola. Colour is used throughout: a pale
 wooden desk can match paper in brightness while being obviously different in
 hue, which is exactly where a luma-only detector fails.
 

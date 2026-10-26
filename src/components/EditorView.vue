@@ -318,7 +318,11 @@ defineExpose({ openFrame: () => (mode.value = "frame") });
         <span>Back</span>
       </button>
 
-      <div class="editor-count" aria-live="polite">
+      <div
+        class="editor-count"
+        aria-live="polite"
+        :aria-label="`Page ${pageIndex} of ${scan.pages.length}`"
+      >
         {{ pageIndex }}<span>/{{ scan.pages.length }}</span>
       </div>
 
