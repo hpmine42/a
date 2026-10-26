@@ -34,10 +34,8 @@ jobs:
       - name: UI tests (jsdom)
         run: npm test
 
-      - name: Build
+      - name: Build (relative asset paths + dist asset check)
         run: npm run build
-        env:
-          VITE_BASE: /${{ github.event.repository.name }}/
 
       - name: Upload site
         uses: actions/upload-artifact@v4
@@ -71,3 +69,28 @@ jobs:
 
       - id: deploy
         uses: actions/deploy-pages@v4
+
+      # A deploy that "succeeded" but published nothing looks exactly like a
+      # white page: index.html arrives, its bundle 404s. Check the live URL for
+      # files that only exist in dist/, instead of trusting the green tick.
+      - name: Verify the live site is the built app
+        run: |
+          url="${{ steps.deploy.outputs.page_url }}"
+          code=""
+          for attempt in $(seq 1 10); do
+            code=$(curl -s -o /tmp/index.html -w '%{http_code}' "$url" || true)
+            if [ "$code" = "200" ]; then break; fi
+            sleep 10
+          done
+          echo "GET $url -> $code"
+          if [ "$code" != "200" ]; then echo "::error::page did not return 200"; exit 1; fi
+          if ! grep -q 'id="boot"' /tmp/index.html; then
+            echo "::error::$url is not the built index.html (serving the repo root?)"
+            exit 1
+          fi
+          for file in manifest.webmanifest sw.js; do
+            c=$(curl -s -o /dev/null -w '%{http_code}' "${url}${file}" || true)
+            echo "$file -> $c"
+            if [ "$c" != "200" ]; then echo "::error::${url}${file} missing - artifact not deployed"; exit 1; fi
+          done
+          echo "live site verified"

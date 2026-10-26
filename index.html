@@ -17,9 +17,142 @@
       rel="icon"
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230a0b0d'/%3E%3Crect x='9' y='7' width='14' height='18' rx='2' fill='%23ffc061'/%3E%3Cg fill='%230a0b0d'%3E%3Crect x='12' y='11' width='8' height='1.6' rx='.8'/%3E%3Crect x='12' y='15' width='8' height='1.6' rx='.8'/%3E%3Crect x='12' y='19' width='5' height='1.6' rx='.8'/%3E%3C/g%3E%3C/svg%3E"
     />
+    <!-- Inline, not in the bundle: if the stylesheet or the JS never arrives,
+         this is the only thing that can still explain itself. -->
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: #0a0b0d;
+        color: #f2f3f5;
+        font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      }
+      #boot {
+        position: fixed;
+        inset: 0;
+        display: grid;
+        place-content: center;
+        justify-items: center;
+        gap: 14px;
+        padding: 24px;
+        text-align: center;
+      }
+      #boot .mark {
+        width: 54px;
+        height: 66px;
+        border-radius: 6px;
+        background: #ffc061;
+        animation: boot-pulse 1.4s ease-in-out infinite;
+      }
+      #boot h1 {
+        margin: 0;
+        font-size: 17px;
+        font-weight: 600;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+      }
+      #boot p {
+        margin: 0;
+        max-width: 30ch;
+        font-size: 13.5px;
+        line-height: 1.5;
+        color: #9aa1ab;
+      }
+      #boot button {
+        margin-top: 4px;
+        min-height: 44px;
+        padding: 0 20px;
+        border: 0;
+        border-radius: 999px;
+        background: #ffc061;
+        color: #16130c;
+        font: inherit;
+        font-weight: 600;
+      }
+      @keyframes boot-pulse {
+        0%,
+        100% {
+          opacity: 0.35;
+          transform: scale(0.94);
+        }
+        50% {
+          opacity: 1;
+          transform: scale(1);
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #boot .mark {
+          animation: none;
+          opacity: 1;
+        }
+      }
+    </style>
   </head>
   <body>
     <div id="app"></div>
+
+    <!-- Shown until Vue takes over. main.ts removes it on mount, so a blank
+         page now means "the bundle really did not start" — and says so. -->
+    <div id="boot" role="status" aria-live="polite">
+      <div class="mark"></div>
+      <h1>flatbed</h1>
+      <p class="boot-msg">Opening the scanner…</p>
+    </div>
+
+    <noscript>
+      <div id="boot-noscript">
+        <p>flatbed needs JavaScript — all the image work happens on this device.</p>
+      </div>
+    </noscript>
+
+    <script>
+      (function () {
+        var box = document.getElementById("boot");
+        if (!box) return;
+        var msg = box.querySelector(".boot-msg");
+        var failed = false;
+
+        function fail(reason) {
+          if (failed || !document.getElementById("boot")) return;
+          failed = true;
+          if (msg) {
+            msg.textContent =
+              "flatbed did not start (" + reason + "). This is usually a stale copy " +
+              "or a half-finished deploy — reloading normally fixes it.";
+          }
+          if (!box.querySelector("button")) {
+            var b = document.createElement("button");
+            b.type = "button";
+            b.textContent = "Reload";
+            b.onclick = function () {
+              location.reload();
+            };
+            box.appendChild(b);
+          }
+        }
+
+        // A 404 on the module or the stylesheet fires error on the element.
+        window.addEventListener(
+          "error",
+          function (e) {
+            var t = e.target;
+            if (t && t.tagName === "SCRIPT") fail("script missing");
+            else if (t && t.tagName === "LINK") fail("stylesheet missing");
+            else fail(e.message || "script error");
+          },
+          true
+        );
+        window.addEventListener("unhandledrejection", function (e) {
+          fail((e.reason && e.reason.message) || "startup error");
+        });
+
+        // Anything still on screen after this long is not a slow network.
+        setTimeout(function () {
+          if (document.getElementById("boot") && !failed)
+            fail("timed out waiting for the app");
+        }, 9000);
+      })();
+    </script>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

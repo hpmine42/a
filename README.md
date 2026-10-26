@@ -15,6 +15,8 @@
 
 ---
 
+**Live: <https://hpmine42.github.io/scanner/>** — no install, no account.
+
 You need one page as a PDF. So you take a phone photo — crooked, grey, a shadow
 across the bottom, half the desk in frame — and every scanner app wants an
 account and an upload.

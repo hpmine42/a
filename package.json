@@ -6,7 +6,7 @@
   "description": "The flatbed scanner that lives in your browser. No upload, no account.",
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 5173",
-    "build": "vue-tsc --noEmit && vite build",
+    "build": "vue-tsc --noEmit && vite build && node scripts/check-dist.mjs",
     "typecheck": "vue-tsc --noEmit",
     "preview": "vite preview --host 0.0.0.0 --port 4173",
     "test:cv": "esbuild scripts/test-cv.ts --bundle --platform=node --format=esm --outfile=.tmp/test-cv.mjs --log-level=warning && node .tmp/test-cv.mjs",
