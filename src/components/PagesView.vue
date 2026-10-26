@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import Icon from "./Icon.vue";
-import { exportPdf } from "../lib/pdf";
+import { exportPdf, type PageFormat } from "../lib/pdf";
 import { clearPages, removePage, scan } from "../lib/store";
 
 const emit = defineEmits<{ (e: "back"): void; (e: "edit", id: number): void; (e: "add"): void }>();
@@ -11,6 +11,12 @@ const progress = ref({ done: 0, total: 0 });
 const error = ref<string | null>(null);
 
 const isBusy = computed(() => busy.value);
+
+const formats: { id: PageFormat; label: string; hint: string }[] = [
+  { id: "a4", label: "A4", hint: "Print on A4, 4% margin" },
+  { id: "letter", label: "Letter", hint: "US Letter, 4% margin" },
+  { id: "fit", label: "Fit", hint: "Page matches the scan exactly" },
+];
 const label = computed(() => (scan.pages.length === 1 ? "1 page" : `${scan.pages.length} pages`));
 
 async function savePdf() {
@@ -18,7 +24,7 @@ async function savePdf() {
   busy.value = true;
   error.value = null;
   try {
-    await exportPdf(scan.pages, (done, total) => (progress.value = { done, total }));
+    await exportPdf(scan.pages, scan.format, (done, total) => (progress.value = { done, total }));
   } catch (err) {
     console.error(err);
     error.value = "Export failed — try again.";
@@ -57,6 +63,19 @@ async function savePdf() {
     </div>
 
     <footer class="pages-dock">
+      <div class="paper-row" role="group" aria-label="Paper size">
+        <button
+          v-for="option in formats"
+          :key="option.id"
+          class="paper"
+          :class="{ active: scan.format === option.id }"
+          :aria-pressed="scan.format === option.id"
+          :title="option.hint"
+          @click="scan.format = option.id"
+        >
+          {{ option.label }}
+        </button>
+      </div>
       <p v-if="error" class="pages-error">{{ error }}</p>
       <button class="save" :disabled="isBusy || !scan.pages.length" @click="savePdf">
         <Icon name="pdf" :size="19" />

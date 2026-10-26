@@ -32,6 +32,8 @@ export const EXPORT_MAX = 2600;
 export const scan = reactive({
   pages: [] as Page[],
   activeId: 0,
+  /** Paper size for the exported PDF. */
+  format: "a4" as "a4" | "letter" | "fit",
 });
 
 let nextId = 1;

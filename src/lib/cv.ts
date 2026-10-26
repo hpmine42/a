@@ -677,6 +677,8 @@ export function enhance(src: ImageData, opts: EnhanceOpts): ImageData {
     // Sauvola: t = m * (1 + k * (s/R - 1)); k scales with the strength slider
     const k = 0.06 + ((opts.strength ?? 55) / 100) * 0.42;
     const R = 128;
+    const ink = new Uint8Array(w * h);
+
     for (let y = 0; y < h; y++) {
       const y0 = Math.max(0, y - r);
       const y1 = Math.min(h, y + r + 1);
@@ -687,12 +689,42 @@ export function enhance(src: ImageData, opts: EnhanceOpts): ImageData {
         const m2 = boxMean(s2, w, x0, y0, x1, y1);
         const dev = Math.sqrt(Math.max(0, m2 - m * m));
         const t = m * (1 + k * (dev / R - 1));
-        const g = gray[y * w + x];
-        const isInk = g < t;
-        // keep a hint of anti-aliasing so text doesn't look like pixel vomit
+        ink[y * w + x] = gray[y * w + x] < t ? 1 : 0;
+      }
+    }
+
+    // Despeckle: paper grain and JPEG noise produce isolated dark pixels that
+    // read as dirt once the page is pure black and white. Drop a pixel only if
+    // it stands alone — real glyph strokes always have neighbours.
+    const clean = new Uint8Array(ink);
+    for (let y = 1; y < h - 1; y++) {
+      for (let x = 1; x < w - 1; x++) {
+        const i = y * w + x;
+        if (!ink[i]) continue;
+        const n = ink[i - 1] + ink[i + 1] + ink[i - w] + ink[i + w] +
+          ink[i - w - 1] + ink[i - w + 1] + ink[i + w - 1] + ink[i + w + 1];
+        if (n <= 1) clean[i] = 0;
+      }
+    }
+
+    // Rescale so the result keeps a little anti-aliasing: at 1:1 the ink is
+    // black, but the page is exported at a higher resolution than we screen it.
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = y * w + x;
+        const isInk = clean[i] === 1;
         let val = isInk ? 0 : 255;
-        if (Math.abs(g - t) < 12 && !isInk) val = 232;
-        const idx = (y * w + x) * 4;
+        if (!isInk) {
+          // faint neighbours of ink become off-white, which keeps small text
+          // readable when the PDF is scaled up
+          const around =
+            (x > 0 && clean[i - 1]) ||
+            (x < w - 1 && clean[i + 1]) ||
+            (y > 0 && clean[i - w]) ||
+            (y < h - 1 && clean[i + w]);
+          if (around) val = 236;
+        }
+        const idx = i * 4;
         o[idx] = val;
         o[idx + 1] = val;
         o[idx + 2] = val;

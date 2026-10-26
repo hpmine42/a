@@ -140,6 +140,24 @@ describe("capture flow", () => {
     wrapper.unmount();
   });
 
+  it("remembers the chosen paper size for the export", async () => {
+    stubDemoFetch();
+    const wrapper = mount(App);
+    await tick(20);
+    await openDemoPhoto(wrapper);
+    await wrapper.find("button.done").trigger("click");
+    await tick(100);
+
+    const letter = wrapper.findAll("button.paper").find((b) => b.text() === "Letter");
+    expect(letter).toBeTruthy();
+    await letter!.trigger("click");
+    expect(scan.format).toBe("letter");
+    expect(letter!.classes()).toContain("active");
+
+    scan.format = "a4";
+    wrapper.unmount();
+  });
+
   it("removes a page and keeps the grid consistent", async () => {
     stubDemoFetch();
     const wrapper = mount(App);

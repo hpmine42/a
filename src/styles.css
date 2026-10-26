@@ -787,6 +787,36 @@ img {
   padding: 10px 16px calc(18px + env(safe-area-inset-bottom, 0px));
 }
 
+.paper-row {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+  margin-bottom: 10px;
+}
+
+.paper {
+  height: 30px;
+  padding: 0 14px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 550;
+  letter-spacing: 0.02em;
+  color: var(--muted-2);
+  border: 1px solid transparent;
+  transition: color 0.15s var(--ease), background 0.15s var(--ease),
+    border-color 0.15s var(--ease);
+}
+
+.paper:hover {
+  color: var(--text);
+}
+
+.paper.active {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.06);
+  border-color: var(--line-strong);
+}
+
 .pages-error {
   margin: 0 0 8px;
   font-size: 12.5px;

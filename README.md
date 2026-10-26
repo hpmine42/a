@@ -41,7 +41,10 @@ Both images come from the demo photo that ships with the app.
   release re-renders the page.
 - **Three looks** — clean B&W (adaptive threshold, shadow-proof), grayscale,
   colour — as one-tap swatches.
-- **Multi-page PDF**, stacked in a filmstrip, exported at up to 2600px per page.
+- **Multi-page PDF** at up to 2600px per page — A4, US Letter, or a page that
+  matches the scan exactly.
+- **Installable** — a real PWA with an offline shell. Add it to the home screen
+  and it keeps working with no network at all.
 
 ## How the detection works
 
@@ -76,12 +79,17 @@ If the browser blocks camera access (or you are on desktop), the app offers
 ```bash
 npm run typecheck  # vue-tsc, strict
 npm run test:cv    # real CV pipeline on the demo photo, with assertions
-npm test           # UI flows in jsdom: capture → edit → pages → delete
+npm test           # UI flows in jsdom + PDF page geometry
 ```
 
 `test:cv` is the honest one: it detects the page in `public/samples/letter.jpg`,
 checks the corners against hand-measured coordinates, and fails the build if the
-detector drifts.
+detector drifts. `tests/pdf.test.ts` covers the placement maths, because getting
+that wrong prints cropped documents.
+
+The B&W output runs a despeckle pass after the adaptive threshold: paper grain
+and JPEG noise become visible dirt once a page is pure black and white, and
+isolated pixels are not glyphs.
 
 CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs typecheck, both
 test suites and the build on every push and PR, then deploys `main` to GitHub
@@ -92,7 +100,7 @@ Pages.
 - OCR layer (tesseract.js) so exported PDFs are searchable
 - Drag to reorder pages in the filmstrip
 - Batch split: several receipts in one photo
-- PWA install + share-target on mobile
+- Share-target on mobile (receive photos from other apps)
 
 ## License
 
