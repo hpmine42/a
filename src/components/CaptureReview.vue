@@ -4,7 +4,12 @@ import Icon from "./Icon.vue";
 import { canvasFor } from "../lib/image";
 import { containFit } from "../lib/geometry";
 
-const props = defineProps<{ src: ImageData; pageCount: number }>();
+const props = defineProps<{
+  src: ImageData;
+  pageCount: number;
+  /** Was live detection switched on when this photo was taken? */
+  detectionOn: boolean;
+}>();
 const emit = defineEmits<{
   (e: "auto"): void;
   (e: "manual"): void;
@@ -72,31 +77,41 @@ watch(() => props.src, draw);
     </div>
 
     <div class="review-sheet">
+      <!--
+        Two different situations, two different sentences. "No page detected"
+        is only true when detection actually ran; with the toggle off the user
+        was never looking for an outline, so asking "how should we crop?" is
+        the honest question.
+      -->
       <p class="review-title">
-        <strong>No page detected</strong>
-        <span>How should this photo be cropped?</span>
+        <strong>{{ props.detectionOn ? "No page edge found" : "How should we crop this?" }}</strong>
+        <span>
+          {{ props.detectionOn
+            ? "Nothing to snap to — pick a crop and straighten it yourself."
+            : "Detection is off, so nothing was cropped. Pick one option:" }}
+        </span>
       </p>
 
-      <button class="choice primary" @click="emit('manual')">
-        <span class="choice-icon"><Icon name="crop" :size="22" /></span>
+      <button class="choice primary" @click="emit('auto')">
+        <span class="choice-icon"><Icon name="auto" :size="22" /></span>
         <span class="choice-text">
-          <strong>Crop by hand</strong>
-          <small>Place the four corners yourself</small>
+          <strong>Find the page automatically</strong>
+          <small>Scan this photo once for a paper edge</small>
         </span>
       </button>
 
-      <button class="choice" @click="emit('auto')">
-        <span class="choice-icon"><Icon name="auto" :size="22" /></span>
+      <button class="choice" @click="emit('manual')">
+        <span class="choice-icon"><Icon name="crop" :size="22" /></span>
         <span class="choice-text">
-          <strong>Detect the page</strong>
-          <small>Let flatbed search this photo once</small>
+          <strong>Crop it by hand</strong>
+          <small>Place the four corners yourself</small>
         </span>
       </button>
 
       <button class="choice" @click="emit('whole')">
         <span class="choice-icon"><Icon name="image" :size="22" /></span>
         <span class="choice-text">
-          <strong>Use the whole photo</strong>
+          <strong>Keep the whole photo</strong>
           <small>No crop, no straightening</small>
         </span>
       </button>

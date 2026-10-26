@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fitOnPage } from "../src/lib/pdf";
+import { fitOnPage, pdfFilename } from "../src/lib/pdf";
 
 const A4 = { width: 210, height: 297 };
 const LETTER = { width: 215.9, height: 279.4 };
@@ -52,5 +52,29 @@ describe("fitOnPage", () => {
         expect(place.y + place.height).toBeLessThanOrEqual(place.size.height + 1e-9);
       }
     }
+  });
+});
+
+describe("pdfFilename", () => {
+  it("keeps a normal name and appends the extension", () => {
+    expect(pdfFilename("Invoice August", 1)).toBe("Invoice August.pdf");
+  });
+
+  it("does not double up an extension the user typed", () => {
+    expect(pdfFilename("invoice.pdf", 1)).toBe("invoice.pdf");
+    expect(pdfFilename("invoice.PDF", 1)).toBe("invoice.pdf");
+  });
+
+  it("strips path separators and characters filesystems reject", () => {
+    expect(pdfFilename("2026/03 Rechnung: Müller?", 2)).toBe("2026-03 Rechnung- Müller.pdf");
+  });
+
+  it("falls back to a sane name when the field is empty", () => {
+    expect(pdfFilename("   ", 1)).toBe("scan.pdf");
+    expect(pdfFilename("", 3)).toBe("scan-3-pages.pdf");
+  });
+
+  it("caps the length so a paste cannot produce an unopenable file", () => {
+    expect(pdfFilename("x".repeat(300), 1).length).toBeLessThanOrEqual(84);
   });
 });

@@ -100,6 +100,20 @@ check("B&W keeps text and clears paper", bwInk > 0.005 && bwInk < 0.2, `ink ${(b
 const gray = enhance(warped, { mode: "gray", brightness: 0, contrast: 0, strength: 55 });
 check("grayscale renders", gray.width === warped.width, `${gray.width}×${gray.height}`);
 
+const colour = enhance(warped, { mode: "color", brightness: 0, contrast: 0, strength: 55 });
+// a page is mostly paper: after normalisation the average luma has to be high,
+// otherwise the output looks grey and dirty rather than scanned
+const meanLuma = (img: ImageData) => {
+  let sum = 0;
+  for (let i = 0; i < img.data.length; i += 4) {
+    sum += 0.299 * img.data[i] + 0.587 * img.data[i + 1] + 0.114 * img.data[i + 2];
+  }
+  return sum / (img.width * img.height);
+};
+const paper = meanLuma(bw);
+check("B&W paper is actually white", paper > 205, `mean luma ${paper.toFixed(0)}`);
+check("colour renders", colour.width === warped.width, `${colour.width}×${colour.height}`);
+
 // Keep the visual artefacts around for manual eyeballing; CI ignores them.
 mkdirSync(".tmp", { recursive: true });
 const write = (name: string, img: ImageData) =>
@@ -109,6 +123,7 @@ const write = (name: string, img: ImageData) =>
   );
 write("out-bw", bw);
 write("out-gray", gray);
+write("out-colour", colour);
 write("out-warped", warped);
 
 console.log(failures === 0 ? "\nall checks passed\n" : `\n${failures} check(s) failed\n`);

@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import Icon from "./Icon.vue";
-import { exportPdf, type PageFormat } from "../lib/pdf";
+import { exportPdf, pdfFilename, type PageFormat } from "../lib/pdf";
 import { clearPages, removePage, scan } from "../lib/store";
 
 const emit = defineEmits<{ (e: "back"): void; (e: "edit", id: number): void; (e: "add"): void }>();
@@ -9,6 +9,7 @@ const emit = defineEmits<{ (e: "back"): void; (e: "edit", id: number): void; (e:
 const busy = ref(false);
 const progress = ref({ done: 0, total: 0 });
 const error = ref<string | null>(null);
+const nameField = ref<HTMLInputElement | null>(null);
 
 const isBusy = computed(() => busy.value);
 
@@ -19,12 +20,25 @@ const formats: { id: PageFormat; label: string; hint: string }[] = [
 ];
 const label = computed(() => (scan.pages.length === 1 ? "1 page" : `${scan.pages.length} pages`));
 
+/** A friendly default: "scan 2026-10-26", editable before saving. */
+function suggestedName(): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `scan ${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+onMounted(() => {
+  if (!scan.filename) scan.filename = suggestedName();
+});
+
+const finalName = computed(() => pdfFilename(scan.filename, scan.pages.length));
+
 async function savePdf() {
   if (!scan.pages.length || busy.value) return;
   busy.value = true;
   error.value = null;
   try {
-    await exportPdf(scan.pages, scan.format, (done, total) => (progress.value = { done, total }));
+    await exportPdf(scan.pages, scan.format, (done, total) => (progress.value = { done, total }), scan.filename);
   } catch (err) {
     console.error(err);
     error.value = "Export failed — try again.";
@@ -55,7 +69,7 @@ async function savePdf() {
           <span class="page-num">{{ i + 1 }}</span>
         </button>
         <button class="page-del" :aria-label="`Remove page ${i + 1}`" @click="removePage(page.id)">
-          <Icon name="close" :size="14" :stroke="2" />
+          <Icon name="close" :size="15" :stroke="2.2" />
         </button>
       </figure>
 
@@ -65,6 +79,29 @@ async function savePdf() {
     </div>
 
     <footer class="pages-dock">
+      <label class="name-field" for="pdf-name">
+        <span class="name-label">File name</span>
+        <span class="name-input">
+          <input
+            id="pdf-name"
+            ref="nameField"
+            v-model="scan.filename"
+            type="text"
+            inputmode="text"
+            autocomplete="off"
+            autocapitalize="off"
+            spellcheck="false"
+            maxlength="80"
+            placeholder="scan 2026-10-26"
+            :aria-describedby="'pdf-name-hint'"
+          />
+          <span class="name-ext" aria-hidden="true">.pdf</span>
+        </span>
+      </label>
+      <p id="pdf-name-hint" class="name-hint">
+        Saves as <strong>{{ finalName }}</strong>
+      </p>
+
       <div class="paper-row" role="group" aria-label="Paper size">
         <button
           v-for="option in formats"

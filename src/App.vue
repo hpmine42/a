@@ -4,17 +4,19 @@ import CameraView from "./components/CameraView.vue";
 import CaptureReview from "./components/CaptureReview.vue";
 import EditorView from "./components/EditorView.vue";
 import PagesView from "./components/PagesView.vue";
-import { detectPageQuad, fullFrameQuad, type Quad } from "./lib/cv";
+import { detectPageQuad, fullFrameQuad, insetQuad, type Quad } from "./lib/cv";
 import { makeThumb, nextFrame } from "./lib/image";
 import { addPage, processPage, scan } from "./lib/store";
 
 type View = "camera" | "review" | "edit" | "pages";
-type Shot = { img: ImageData; quad: Quad | null };
+type Shot = { img: ImageData; quad: Quad | null; auto: boolean };
 
 const view = ref<View>("camera");
 const scanning = ref(false);
 const scanThumb = ref("");
 const pending = ref<ImageData | null>(null);
+/** Did the viewfinder have detection switched on when the photo was taken? */
+const pendingAuto = ref(false);
 const editorMode = ref<"result" | "frame">("result");
 const editorNotice = ref<string | null>(null);
 
@@ -47,6 +49,7 @@ function pump() {
     });
   } else {
     pending.value = next.img;
+    pendingAuto.value = next.auto;
     view.value = "review";
   }
 }
@@ -58,7 +61,7 @@ async function applyDetected(img: ImageData, quad: Quad) {
   await nextFrame();
   try {
     const page = addPage(img, "scan");
-    page.quad = quad;
+    page.quad = insetQuad(quad, 0.005);
     page.warped = null;
     await processPage(page, { full: true, rewriteWarp: true });
     await sleep(300);
@@ -102,7 +105,7 @@ function chooseManual() {
   const page = addPage(img, "scan");
   // a detection guess is a decent starting point, but it never blocks the user
   const guess = detectPageQuad(img, { effort: "fast" });
-  page.quad = guess ?? fullFrameQuad(img.width, img.height);
+  page.quad = guess ? insetQuad(guess, 0.005) : fullFrameQuad(img.width, img.height);
   page.warped = null;
   editorMode.value = "frame";
   editorNotice.value = null;
@@ -166,6 +169,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
         key="review"
         :src="pending"
         :page-count="scan.pages.length"
+        :detection-on="pendingAuto"
         @auto="chooseAuto"
         @manual="chooseManual"
         @whole="chooseWhole"

@@ -49,6 +49,9 @@ body,
 body {
   margin: 0;
   overflow-x: hidden;
+  /* one finger scrolls, two fingers do not zoom the chrome — the camera owns
+     pinch (see src/lib/gestures.ts) */
+  touch-action: pan-y;
   background: var(--bg);
   color: var(--text);
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
@@ -268,6 +271,18 @@ img {
   background: #050607;
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.055);
   isolation: isolate;
+  /* the viewfinder handles its own pinch-to-zoom */
+  touch-action: none;
+}
+
+/* A layer so the fallback zoom (for lenses without a zoom capability) scales
+   the picture *and* the detection outline together. */
+.camera-zoom {
+  position: absolute;
+  inset: 0;
+  transform-origin: center center;
+  will-change: transform;
+  transition: transform 0.12s var(--ease);
 }
 
 .camera-video,
@@ -529,6 +544,51 @@ img {
   color: #1a1305;
   background: var(--amber);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+}
+
+.zoom-row {
+  position: absolute;
+  z-index: 4;
+  left: 50%;
+  bottom: calc(14px * var(--u));
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: calc(6px * var(--u));
+  padding: calc(5px * var(--u));
+  border-radius: 999px;
+  background: rgba(10, 12, 15, 0.62);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(14px) saturate(140%);
+}
+
+.zoom-chip {
+  min-width: calc(48px * var(--u));
+  height: calc(40px * var(--u));
+  padding: 0 calc(10px * var(--u));
+  border-radius: 999px;
+  font-size: calc(13.5px * var(--u));
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  transition: background 0.15s var(--ease), color 0.15s var(--ease),
+    transform 0.12s var(--ease);
+}
+
+.zoom-chip:active {
+  transform: scale(0.94);
+}
+
+.zoom-chip.active {
+  color: #1a1305;
+  background: var(--amber);
+}
+
+.zoom-value {
+  padding: 0 calc(10px * var(--u)) 0 calc(4px * var(--u));
+  font-size: calc(12.5px * var(--u));
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
 }
 
 .camera-hint {
@@ -828,8 +888,12 @@ img {
     calc(16px * var(--u) + env(safe-area-inset-bottom, 0px));
 }
 
+/* Three little pages instead of three abstract dots: you pick a look by seeing
+   the actual scan in it. */
 .looks {
   display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
   gap: calc(6px * var(--u));
   padding: calc(6px * var(--u));
   border-radius: calc(20px * var(--u));
@@ -839,48 +903,60 @@ img {
 
 .look {
   display: grid;
+  flex: 1 1 0;
+  min-width: 0;
   justify-items: center;
-  gap: calc(6px * var(--u));
-  min-width: calc(58px * var(--u));
-  padding: calc(9px * var(--u)) calc(6px * var(--u)) calc(7px * var(--u));
-  border-radius: calc(15px * var(--u));
+  gap: calc(5px * var(--u));
+  padding: calc(5px * var(--u)) calc(4px * var(--u)) calc(4px * var(--u));
+  border-radius: calc(14px * var(--u));
   transition: background 0.15s var(--ease), box-shadow 0.18s var(--ease);
 }
 
-.look-chip {
-  width: calc(34px * var(--u));
-  height: calc(34px * var(--u));
-  border-radius: 50%;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  transition: transform 0.16s var(--ease);
+.look-shot {
+  position: relative;
+  display: block;
+  width: 100%;
+  max-width: calc(46px * var(--u));
+  aspect-ratio: 3 / 4;
+  overflow: hidden;
+  border-radius: calc(6px * var(--u));
+  background: linear-gradient(160deg, #2a2f37, #14171c);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.09);
+  transition: transform 0.16s var(--ease), box-shadow 0.18s var(--ease);
 }
 
-.look.bw .look-chip {
-  background: linear-gradient(135deg, #ffffff 0 50%, #101318 50% 100%);
-}
-
-.look.gray .look-chip {
-  background: linear-gradient(135deg, #e9ecf0, #6e747d);
-}
-
-.look.color .look-chip {
-  background: linear-gradient(135deg, #ffd7a8, #8fb7ff);
+.look-shot img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .look-label {
   font-size: var(--fs-label);
-  font-weight: 600;
+  font-weight: 650;
   color: var(--muted);
   letter-spacing: 0.01em;
+  white-space: nowrap;
 }
 
-.look:hover .look-chip {
-  transform: scale(1.06);
+.look:hover .look-shot {
+  transform: translateY(-1px);
+}
+
+.look:active .look-shot {
+  transform: scale(0.96);
 }
 
 .look.active {
-  background: rgba(255, 192, 97, 0.1);
-  box-shadow: inset 0 0 0 1px rgba(255, 192, 97, 0.55);
+  background: rgba(255, 192, 97, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(255, 192, 97, 0.6);
+}
+
+.look.active .look-shot {
+  box-shadow:
+    0 0 0 calc(2px * var(--u)) var(--amber),
+    0 6px 16px rgba(255, 192, 97, 0.28);
 }
 
 .look.active .look-label {
@@ -944,6 +1020,7 @@ img {
 .page-card {
   position: relative;
   margin: 0;
+  min-width: 0;
 }
 
 .page-thumb {
@@ -988,26 +1065,33 @@ img {
   backdrop-filter: blur(6px);
 }
 
+/* Sits *inside* the thumbnail corner: a badge hanging outside the card gets
+   clipped by the scrolling grid, which read as a cut-off close button. */
 .page-del {
   position: absolute;
-  top: calc(-10px * var(--u));
-  right: calc(-10px * var(--u));
+  top: calc(6px * var(--u));
+  right: calc(6px * var(--u));
   display: grid;
   place-items: center;
-  width: calc(40px * var(--u));
-  height: calc(40px * var(--u));
+  width: calc(38px * var(--u));
+  height: calc(38px * var(--u));
   border-radius: 50%;
-  color: var(--text);
-  background: #262b33;
-  border: 1px solid var(--line-strong);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
-  opacity: 0.92;
+  color: #fff;
+  background: rgba(12, 14, 18, 0.66);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  backdrop-filter: blur(10px) saturate(140%);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.45);
   transition: background 0.15s var(--ease), transform 0.12s var(--ease);
 }
 
 .page-del:hover {
   background: var(--danger);
   color: #1a0a07;
+  border-color: transparent;
+}
+
+.page-del:active {
+  transform: scale(0.92);
 }
 
 .page-add {
@@ -1032,6 +1116,79 @@ img {
 .pages-dock {
   padding: calc(12px * var(--u)) calc(16px * var(--u))
     calc(18px * var(--u) + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--line);
+  background: linear-gradient(to top, rgba(8, 9, 11, 0.97), rgba(8, 9, 11, 0.86));
+  backdrop-filter: blur(18px);
+}
+
+.name-field {
+  display: grid;
+  gap: calc(6px * var(--u));
+}
+
+.name-label {
+  font-size: var(--fs-label);
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted-2);
+}
+
+.name-input {
+  display: flex;
+  align-items: center;
+  gap: calc(6px * var(--u));
+  height: var(--tap);
+  padding: 0 calc(16px * var(--u));
+  border-radius: calc(16px * var(--u));
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--line-strong);
+  transition: border-color 0.16s var(--ease), background 0.16s var(--ease);
+}
+
+.name-input:focus-within {
+  border-color: rgba(255, 192, 97, 0.65);
+  background: rgba(255, 192, 97, 0.07);
+}
+
+.name-input input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-strong);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  outline: none;
+}
+
+.name-input input::placeholder {
+  color: var(--muted-2);
+  font-weight: 500;
+}
+
+.name-ext {
+  flex: 0 0 auto;
+  font-size: var(--fs);
+  font-weight: 600;
+  color: var(--muted-2);
+}
+
+.name-hint {
+  margin: calc(6px * var(--u)) 0 calc(10px * var(--u));
+  font-size: var(--fs-small);
+  color: var(--muted-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.name-hint strong {
+  color: var(--muted);
+  font-weight: 600;
 }
 
 .paper-row {

@@ -85,7 +85,14 @@ export function denyCamera() {
 export function allowCamera() {
   Object.defineProperty(navigator, "mediaDevices", {
     configurable: true,
-    value: { getUserMedia: async () => fakeCameraStream() },
+    value: {
+      getUserMedia: async () => fakeCameraStream(),
+      enumerateDevices: async () => [
+        { kind: "videoinput", deviceId: "main-back", label: "Back Camera" },
+        { kind: "videoinput", deviceId: "ultra-back", label: "Back Ultra Wide Camera" },
+        { kind: "audioinput", deviceId: "mic", label: "Microphone" },
+      ],
+    },
   });
 }
 
@@ -93,6 +100,7 @@ export function fakeCameraStream() {
   const track = {
     stop: () => undefined,
     getCapabilities: () => ({}),
+    getSettings: () => ({ deviceId: "main-back" }),
     applyConstraints: async () => undefined,
   };
   return {

@@ -1,5 +1,5 @@
 import { jsPDF } from "jspdf";
-import { enhance, outputSize, warp } from "./cv";
+import { enhance, insetQuad, outputSize, warp } from "./cv";
 import { imageDataToCanvas, nextFrame, slug } from "./image";
 import { EXPORT_MAX, type Page } from "./store";
 
@@ -51,11 +51,32 @@ export function fitOnPage(
   };
 }
 
+/**
+ * Turn what the user typed into a safe file name. Kept pure so the naming rules
+ * are testable: no path separators, no characters Windows rejects, always ends
+ * in `.pdf`, and a sensible fallback for an empty field.
+ */
+export function pdfFilename(input: string, pages: number): string {
+  const base =
+    input
+      .trim()
+      // strip an extension the user typed by habit
+      .replace(/\.pdf$/i, "")
+      // characters that break a download or a filesystem
+      .replace(/[\\/:*?"<>|]+/g, "-")
+      .replace(/\s+/g, " ")
+      .replace(/^[.\s-]+|[.\s-]+$/g, "")
+      .slice(0, 80) || (pages === 1 ? "scan" : `scan-${pages}-pages`);
+  return `${base}.pdf`;
+}
+
 /** Build the PDF and return the file name it was saved as. */
 export async function exportPdf(
   pages: Page[],
   format: PageFormat = "a4",
-  onProgress?: Progress
+  onProgress?: Progress,
+  /** Base name for the file, without `.pdf`. */
+  name = ""
 ): Promise<string> {
   let doc: jsPDF | null = null;
 
@@ -64,10 +85,12 @@ export async function exportPdf(
     onProgress?.(i, pages.length);
     await nextFrame();
 
-    const size = outputSize(page.quad, EXPORT_MAX);
-    const warped = warp(page.src, page.quad, size.w, size.h);
+    const quad = insetQuad(page.quad, 0.005);
+    const size = outputSize(quad, EXPORT_MAX);
+    const warped = warp(page.src, quad, size.w, size.h);
     const result = enhance(warped, page.opts);
-    const dataUrl = imageDataToCanvas(result).toDataURL("image/jpeg", 0.9);
+    // 0.94 keeps text crisp without doubling the file size
+    const dataUrl = imageDataToCanvas(result).toDataURL("image/jpeg", 0.94);
 
     const paper =
       format === "fit"
@@ -89,12 +112,13 @@ export async function exportPdf(
       );
     }
 
-    doc.addImage(dataUrl, "JPEG", place.x, place.y, place.width, place.height, undefined, "FAST");
+    doc.addImage(dataUrl, "JPEG", place.x, place.y, place.width, place.height, undefined, "SLOW");
   }
 
   onProgress?.(pages.length, pages.length);
   const filename =
-    pages.length === 1 ? `${slug(pages[0].name)}.pdf` : `scan-${pages.length}-pages.pdf`;
-  doc?.save(filename);
-  return filename;
+    name.trim() || (pages.length === 1 ? slug(pages[0].name) : "");
+  const safe = pdfFilename(filename, pages.length);
+  doc?.save(safe);
+  return safe;
 }

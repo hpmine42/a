@@ -16,7 +16,7 @@ self.onmessage = (event: MessageEvent<Request>) => {
     const found = detectPageQuad(img, { effort: "fast" });
     quad = found ? found.map((p) => ({ x: p.x, y: p.y })) : null;
   } catch (err) {
-    console.warn("[flatbed] worker detection failed", err);
+    console.warn("[scanner] worker detection failed", err);
   }
   const reply: Reply = { id, quad, ms: Math.round(performance.now() - started) };
   (self as unknown as Worker).postMessage(reply);

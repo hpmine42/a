@@ -2,8 +2,8 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import CornerEditor from "./CornerEditor.vue";
 import Icon from "./Icon.vue";
-import type { Mode, Quad } from "../lib/cv";
-import { canvasFor, containFit } from "../lib/image";
+import { enhance, type Mode, type Quad } from "../lib/cv";
+import { canvasFor, containFit, imageDataToCanvas } from "../lib/image";
 import { activePage, autoDetect, processPage, scan } from "../lib/store";
 
 const props = withDefaults(
@@ -23,10 +23,39 @@ const resultCanvas = ref<HTMLCanvasElement | null>(null);
 const pageIndex = computed(() => scan.pages.findIndex((p) => p.id === scan.activeId) + 1);
 
 const modes: { id: Mode; label: string; short: string; hint: string }[] = [
-  { id: "bw", label: "Black & white", short: "B/W", hint: "Crisp text, white paper" },
-  { id: "gray", label: "Grayscale", short: "Gray", hint: "Softer, keeps shading" },
-  { id: "color", label: "Colour", short: "Colour", hint: "Original tones" },
+  { id: "bw", label: "Black & white", short: "B/W", hint: "Crisp text on clean white paper" },
+  { id: "gray", label: "Soft grey", short: "Grey", hint: "Keeps shading, gentler on photos" },
+  { id: "color", label: "Original colour", short: "Colour", hint: "Stamps, highlighting and logos" },
 ];
+
+/**
+ * Real previews instead of abstract swatches: each option shows the actual page
+ * in that look, so choosing is looking rather than guessing. Rendered from the
+ * warped image at ~140px — a few milliseconds, and only when the crop changes.
+ */
+const previews = ref<Partial<Record<Mode, string>>>({});
+
+function buildPreviews() {
+  const warped = page.value?.warped;
+  if (!warped) return;
+  const scale = Math.min(1, 140 / Math.max(warped.width, warped.height));
+  const w = Math.max(8, Math.round(warped.width * scale));
+  const h = Math.max(8, Math.round(warped.height * scale));
+  const small = document.createElement("canvas");
+  small.width = w;
+  small.height = h;
+  const ctx = small.getContext("2d");
+  if (!ctx) return;
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(imageDataToCanvas(warped), 0, 0, w, h);
+  const tiny = ctx.getImageData(0, 0, w, h);
+  const out: Partial<Record<Mode, string>> = {};
+  for (const m of modes) {
+    const shot = enhance(tiny, { mode: m.id, brightness: 0, contrast: 0, strength: 55 });
+    out[m.id] = imageDataToCanvas(shot).toDataURL("image/jpeg", 0.72);
+  }
+  previews.value = out;
+}
 
 let observer: ResizeObserver | null = null;
 
@@ -67,6 +96,7 @@ async function reprocess(options: { rewriteWarp?: boolean } = {}) {
   busy.value = true;
   try {
     await processPage(current, { full: true, rewriteWarp: options.rewriteWarp });
+    if (options.rewriteWarp || !previews.value.bw) buildPreviews();
     await nextTick();
     drawResult();
   } finally {
@@ -149,6 +179,7 @@ onMounted(async () => {
   if (page.value && !page.value.result) {
     await reprocess({ rewriteWarp: true });
   } else {
+    if (page.value?.warped) buildPreviews();
     await nextTick(drawResult);
   }
   if (props.notice) {
@@ -225,10 +256,13 @@ defineExpose({ openFrame: () => (mode.value = "frame") });
           class="look"
           :class="[m.id, { active: page.opts.mode === m.id }]"
           :aria-pressed="page.opts.mode === m.id"
+          :aria-label="m.label"
           :title="m.hint"
           @click="setMode(m.id)"
         >
-          <span class="look-chip" />
+          <span class="look-shot">
+            <img v-if="previews[m.id]" :src="previews[m.id]" alt="" />
+          </span>
           <span class="look-label">{{ m.short }}</span>
         </button>
       </div>

@@ -1,11 +1,14 @@
 import { createApp } from "vue";
 import App from "./App.vue";
 import { applyViewportFit, watchViewportFit } from "./lib/fit";
+import { installGestureLock } from "./lib/gestures";
 import "./styles.css";
 
 // Before the first paint: a phone in desktop-site mode renders the app at ~40%.
 applyViewportFit();
 watchViewportFit();
+// pinch belongs to the camera only (see lib/gestures.ts)
+installGestureLock();
 
 createApp(App).mount("#app");
 
