@@ -2,129 +2,24 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>flatbed — turn photos into clean scanned PDFs, offline</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#0a0b0d" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <title>flatbed — scan paper, keep the pixels</title>
     <meta
       name="description"
-      content="The scanner that lives in your browser. Straighten paper photos, clean them up, export a sharp PDF. Nothing is uploaded."
+      content="Photograph a document, get a straight, clean, multi-page PDF. Perspective fix, shadow removal, nothing uploaded."
     />
-    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='5' y='4' width='22' height='24' rx='2' fill='%23ffb86b'/%3E%3C/svg%3E" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="./icon-192.png" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230a0b0d'/%3E%3Crect x='9' y='7' width='14' height='18' rx='2' fill='%23ffc061'/%3E%3Cg fill='%230a0b0d'%3E%3Crect x='12' y='11' width='8' height='1.6' rx='.8'/%3E%3Crect x='12' y='15' width='8' height='1.6' rx='.8'/%3E%3Crect x='12' y='19' width='5' height='1.6' rx='.8'/%3E%3C/g%3E%3C/svg%3E"
+    />
   </head>
   <body>
-    <div id="app">
-      <header class="topbar">
-        <div class="brand">
-          <span class="logo" aria-hidden="true"></span>
-          <span class="brandname">flatbed</span>
-          <span class="chip" title="No server, no account, no upload">100% local</span>
-        </div>
-        <div class="topbar-actions">
-          <span class="status" id="status"></span>
-          <button class="btn ghost" id="addMore" hidden>+ Photos</button>
-          <button class="btn ghost" id="clearAll" hidden>Clear</button>
-          <button class="btn" id="exportPdf" disabled>Download PDF</button>
-        </div>
-      </header>
-
-      <main>
-        <!-- empty state ------------------------------------------------------ -->
-        <section class="empty" id="empty">
-          <div class="dropzone" id="dropzone" tabindex="0">
-            <div class="dz-icon" aria-hidden="true">
-              <svg viewBox="0 0 48 48" width="46" height="46" fill="none" stroke="currentColor" stroke-width="1.6">
-                <path d="M8 6h24l8 8v28H8z" />
-                <path d="M32 6v8h8" />
-                <path d="M16 24h16M16 31h16M16 17h8" />
-              </svg>
-            </div>
-            <h1>Drop a photo of a document</h1>
-            <p class="sub">
-              Flatbed straightens the page, wipes the shadow off, and gives you a sharp PDF.
-              Your files never leave this tab.
-            </p>
-            <div class="dz-actions">
-              <button class="btn primary" id="pickFiles">Choose photos</button>
-              <button class="btn ghost" id="useCamera">Use camera</button>
-              <button class="btn ghost" id="useSample">Try the demo photo</button>
-            </div>
-            <p class="hint">or paste from the clipboard with <kbd>Ctrl</kbd>+<kbd>V</kbd></p>
-          </div>
-          <ul class="features">
-            <li><strong>Perspective fix</strong><span>Drag four corners — the paper gets flattened.</span></li>
-            <li><strong>Shadow removal</strong><span>Adaptive threshold, tuned for phone photos.</span></li>
-            <li><strong>Multi-page PDF</strong><span>Stack photos, export one document.</span></li>
-          </ul>
-        </section>
-
-        <!-- editor ---------------------------------------------------------- -->
-        <section class="editor" id="editor" hidden>
-          <div class="stage-wrap">
-            <div class="stage" id="stage">
-              <canvas id="srcCanvas"></canvas>
-              <canvas id="overlay" class="overlay"></canvas>
-            </div>
-            <div class="stage-tools">
-              <button class="btn small ghost" id="detect">Auto-detect corners</button>
-              <button class="btn small ghost" id="resetQuad">Reset</button>
-              <span class="stage-hint">Drag a corner · drag inside to move the whole page</span>
-            </div>
-          </div>
-
-          <aside class="panel">
-            <div class="panel-head">
-              <div class="seg" id="viewSeg">
-                <button class="seg-btn active" data-view="result">Result</button>
-                <button class="seg-btn" data-view="original">Original</button>
-              </div>
-              <span class="res" id="resLabel"></span>
-            </div>
-
-            <div class="preview-frame">
-              <canvas id="preview"></canvas>
-              <div class="busy" id="busy" hidden>processing…</div>
-            </div>
-
-            <div class="panel-body">
-              <div class="field">
-                <label>Look</label>
-                <div class="seg wide" id="modeSeg">
-                  <button class="seg-btn active" data-mode="bw">B&amp;W</button>
-                  <button class="seg-btn" data-mode="gray">Gray</button>
-                  <button class="seg-btn" data-mode="color">Color</button>
-                </div>
-              </div>
-
-              <div class="field" id="strengthField">
-                <label for="strength">Ink strength <output id="strengthOut">55</output></label>
-                <input type="range" id="strength" min="0" max="100" value="55" />
-              </div>
-
-              <div class="field">
-                <label for="brightness">Brightness <output id="brightnessOut">0</output></label>
-                <input type="range" id="brightness" min="-50" max="50" value="0" />
-              </div>
-
-              <div class="field">
-                <label for="contrast">Contrast <output id="contrastOut">0</output></label>
-                <input type="range" id="contrast" min="-50" max="50" value="0" />
-              </div>
-
-              <div class="panel-foot">
-                <button class="btn ghost small" id="applyAll" title="Use these settings for every page">
-                  Apply to all pages
-                </button>
-                <button class="btn ghost small" id="removePage">Remove page</button>
-              </div>
-            </div>
-          </aside>
-        </section>
-      </main>
-
-      <footer class="filmstrip" id="filmstrip" hidden></footer>
-    </div>
-
-    <input type="file" id="fileInput" accept="image/*" multiple hidden />
-    <input type="file" id="cameraInput" accept="image/*" capture="environment" hidden />
+    <div id="app"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
