@@ -1,7 +1,7 @@
 import { jsPDF } from "jspdf";
 import { enhance, insetQuad, outputSize, warp } from "./cv";
 import { imageDataToCanvas, nextFrame, slug } from "./image";
-import { EXPORT_MAX, modeFor, type Page } from "./store";
+import { EDGE_INSET, EXPORT_MAX, type Page } from "./store";
 
 export type PageFormat = "a4" | "letter" | "fit";
 
@@ -85,15 +85,13 @@ export async function exportPdf(
     onProgress?.(i, pages.length);
     await nextFrame();
 
-    const quad = insetQuad(page.quad, 0.005);
+    const quad = insetQuad(page.quad, EDGE_INSET);
     const size = outputSize(quad, EXPORT_MAX);
     const warped = warp(page.src, quad, size.w, size.h);
-    const result = enhance(warped, {
-      mode: modeFor(page.opts),
-      brightness: 0,
-      contrast: 0,
-      strength: 58,
-    });
+    // Optimize off means untouched: the straight photo, nothing applied
+    const result = page.opts.optimize
+      ? enhance(warped, { mode: "bw", brightness: 0, contrast: 0, strength: 58 })
+      : warped;
     // 0.95 with no chroma detail to speak of: honest text, small file
     const dataUrl = imageDataToCanvas(result).toDataURL("image/jpeg", 0.95);
 

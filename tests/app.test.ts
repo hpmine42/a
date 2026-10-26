@@ -111,10 +111,10 @@ describe("capture with a known page", () => {
     expect(wrapper.find(".editor").exists()).toBe(true);
     expect(scan.pages.length).toBe(1);
     // detection runs on a 320px frame of a 1280px video, so the stored quad is
-    // scaled back up by 4 (20 → 80) and then pulled in a hair, so no desk edge
-    // ends up on the finished page
-    expect(scan.pages[0].quad[0].x).toBeGreaterThan(80);
-    expect(scan.pages[0].quad[0].x).toBeLessThan(92);
+    // scaled back up by 4 (20 → 80); the page keeps exactly what was found and
+    // the render pulls the crop in a hair, so no desk edge ends up on the page
+    expect(scan.pages[0].quad[0].x).toBeGreaterThan(78);
+    expect(scan.pages[0].quad[0].x).toBeLessThan(82);
     wrapper.unmount();
   });
 

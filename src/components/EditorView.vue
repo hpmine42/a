@@ -13,11 +13,30 @@ const props = withDefaults(
 
 const emit = defineEmits<{ (e: "back"): void; (e: "done"): void }>();
 
+/**
+ * A pass under ~150ms should not flash a spinner at the user: the spinner is
+ * for a real wait, not for a flicker.
+ */
+function showBusy() {
+  window.clearTimeout(busyTimer);
+  if (busy.value) return;
+  busyTimer = window.setTimeout(() => (busy.value = true), 130);
+}
+
+function hideBusy() {
+  window.clearTimeout(busyTimer);
+  busy.value = false;
+}
+
+/** Breathing room around the page, in CSS pixels — must match .editor-stage. */
+const STAGE_PAD = 40;
+
 const page = computed(() => activePage());
 const mode = ref<"result" | "frame">(props.initialMode);
 const notice = ref<string | null>(props.notice);
 let noticeTimer = 0;
 const busy = ref(false);
+let busyTimer = 0;
 const stage = ref<HTMLDivElement | null>(null);
 const resultCanvas = ref<HTMLCanvasElement | null>(null);
 const pageIndex = computed(() => scan.pages.findIndex((p) => p.id === scan.activeId) + 1);
@@ -25,6 +44,9 @@ const optimizing = computed(() => page.value?.opts.optimize ?? true);
 
 let observer: ResizeObserver | null = null;
 let drawFrame = 0;
+let resizeTimer = 0;
+/** Long side of the render the canvas is showing right now. */
+let renderedSide = 0;
 /** Bumped per reprocess so a slower, older pass cannot overwrite a newer one. */
 let generation = 0;
 
@@ -75,6 +97,24 @@ function queueDraw() {
 }
 
 /**
+ * How many pixels the page actually needs.
+ *
+ * The editor never zooms, so rendering at 2400px to show a 380px-wide page was
+ * nine times the work for a difference no one can see — and it made the
+ * Optimize switch feel sluggish. Render at the size of the glass instead, with
+ * a little headroom for odd pixel ratios. Exports re-render at full size anyway.
+ */
+function neededSide(): number {
+  const host = stage.value;
+  if (!host) return PREVIEW_MAX;
+  const rect = host.getBoundingClientRect();
+  if (!rect.width || !rect.height) return PREVIEW_MAX;
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const long = Math.max(28, Math.max(rect.width, rect.height) - STAGE_PAD);
+  return Math.round(Math.min(PREVIEW_MAX, Math.max(720, long * dpr * 1.04)));
+}
+
+/**
  * One reprocess at a time. `busy` is what the little spinner shows, and the
  * generation counter makes sure a fast toggle back does not end up displaying
  * the slower pass that started earlier.
@@ -83,18 +123,20 @@ async function reprocess(options: { rewriteWarp?: boolean; maxSide?: number; ful
   const current = page.value;
   if (!current) return;
   const mine = ++generation;
-  busy.value = true;
+  showBusy();
   try {
+    const maxSide = options.maxSide ?? neededSide();
     await processPage(current, {
       full: options.full ?? true,
       rewriteWarp: options.rewriteWarp,
-      maxSide: options.maxSide ?? PREVIEW_MAX,
+      maxSide,
     });
     if (mine !== generation) return;
+    renderedSide = maxSide;
     await nextTick();
     queueDraw();
   } finally {
-    if (mine === generation) busy.value = false;
+    if (mine === generation) hideBusy();
   }
 }
 
@@ -141,7 +183,7 @@ function onCommit() {
 async function runAuto() {
   const current = page.value;
   if (!current) return;
-  busy.value = true;
+  showBusy();
   try {
     const found = autoDetect(current);
     if (found) {
@@ -152,7 +194,7 @@ async function runAuto() {
       notice.value = "No page edge found — drag the corners";
     }
   } finally {
-    busy.value = false;
+    hideBusy();
   }
 }
 
@@ -181,12 +223,25 @@ watch(
 );
 
 onMounted(async () => {
-  observer = new ResizeObserver(() => queueDraw());
+  observer = new ResizeObserver(() => {
+    queueDraw();
+    // a real resize (rotation, desktop window) can change how many pixels the
+    // page deserves; re-render once the user has stopped dragging
+    window.clearTimeout(resizeTimer);
+    resizeTimer = window.setTimeout(() => {
+      const want = neededSide();
+      if (renderedSide && Math.abs(want - renderedSide) / renderedSide > 0.18) {
+        void reprocess({ full: false });
+      }
+    }, 260);
+  });
   if (stage.value) observer.observe(stage.value);
-  if (page.value && (!page.value.result || page.value.warpedSide !== PREVIEW_MAX)) {
+  await nextTick();
+  if (page.value && (!page.value.result || page.value.warpedSide !== neededSide())) {
     await reprocess({ rewriteWarp: true });
   } else {
-    await nextTick(queueDraw);
+    renderedSide = page.value?.warpedSide ?? 0;
+    queueDraw();
   }
   if (props.notice) {
     window.clearTimeout(noticeTimer);
@@ -196,6 +251,8 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   observer?.disconnect();
+  window.clearTimeout(resizeTimer);
+  window.clearTimeout(busyTimer);
   if (drawFrame) cancelAnimationFrame(drawFrame);
   window.clearTimeout(noticeTimer);
 });

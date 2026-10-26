@@ -4,7 +4,7 @@ import CameraView from "./components/CameraView.vue";
 import CaptureReview from "./components/CaptureReview.vue";
 import EditorView from "./components/EditorView.vue";
 import PagesView from "./components/PagesView.vue";
-import { detectPageQuad, fullFrameQuad, insetQuad, type Quad } from "./lib/cv";
+import { detectPageQuad, fullFrameQuad, type Quad } from "./lib/cv";
 import { makeThumb, nextFrame } from "./lib/image";
 import { addPage, processPage, scan } from "./lib/store";
 
@@ -22,8 +22,6 @@ const editorNotice = ref<string | null>(null);
 
 const queue: Shot[] = [];
 let busy = false;
-
-const sleep = (ms: number) => new Promise<void>((r) => window.setTimeout(r, ms));
 
 /* ---------------------------------------------------------------- capture */
 
@@ -61,10 +59,9 @@ async function applyDetected(img: ImageData, quad: Quad) {
   await nextFrame();
   try {
     const page = addPage(img, "scan");
-    page.quad = insetQuad(quad, 0.005);
+    page.quad = quad;
     page.warped = null;
     await processPage(page, { full: true, rewriteWarp: true });
-    await sleep(300);
     editorMode.value = "result";
     editorNotice.value = null;
     view.value = "edit";
@@ -105,7 +102,7 @@ function chooseManual() {
   const page = addPage(img, "scan");
   // a detection guess is a decent starting point, but it never blocks the user
   const guess = detectPageQuad(img, { effort: "fast" });
-  page.quad = guess ? insetQuad(guess, 0.005) : fullFrameQuad(img.width, img.height);
+  page.quad = guess ?? fullFrameQuad(img.width, img.height);
   page.warped = null;
   editorMode.value = "frame";
   editorNotice.value = null;

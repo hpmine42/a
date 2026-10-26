@@ -370,6 +370,23 @@ function plausible(quad: Quad, w: number, h: number): boolean {
   return area > 0.05 && area < 0.995;
 }
 
+/**
+ * Bright, colour-neutral pixels = the sheet. One definition, used both to find
+ * candidate blobs and to check a finished quad against the real paper.
+ */
+function paperMask(
+  g: Float32Array,
+  chroma: Float32Array,
+  warmth: Float32Array,
+  thr: number,
+  out: Uint8Array
+): Uint8Array {
+  for (let i = 0; i < g.length; i++) {
+    out[i] = g[i] > thr && chroma[i] < 62 && warmth[i] < 30 ? 1 : 0;
+  }
+  return out;
+}
+
 /** Connected bright, colour-neutral blobs → minimum-area rectangles. */
 function maskCandidates(mask: Uint8Array, w: number, h: number, out: Candidate[]): void {
   const n = w * h;
@@ -554,10 +571,7 @@ export function detectPageQuad(img: ImageData, options: DetectOptions = {}): Qua
 
   for (const t of thresholds) {
     const thr = Math.max(90, Math.min(235, t));
-    const mask = new Uint8Array(n);
-    for (let i = 0; i < n; i++) {
-      mask[i] = g[i] > thr && chroma[i] < 62 && warmth[i] < 30 ? 1 : 0;
-    }
+    const mask = paperMask(g, chroma, warmth, thr, new Uint8Array(n));
     const closed = morphClose(mask, w, h, radius);
     const found: Candidate[] = [];
     maskCandidates(closed, w, h, found);

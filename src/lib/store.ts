@@ -29,8 +29,6 @@ export type Page = {
    *  the final render when the crop changes. */
   warpedSide: number;
   result: ImageData | null;
-  /** The un-optimised render, kept so toggling Optimize is instant. */
-  original: ImageData | null;
   /** Which resolution+look `result` currently holds. */
   cacheKey: string;
   thumb: string | null;
@@ -61,6 +59,13 @@ let nextId = 1;
 /** Optimize starts on: a photographed page is never finished until it is one. */
 export const defaultOpts = (): Opts => ({ optimize: true });
 
+/**
+ * How far the crop is pulled in, as a fraction of the page. Detection and
+ * hand-placed corners both tend to sit a few pixels outside the paper, and that
+ * sliver of desk becomes a dirty edge on every page.
+ */
+export const EDGE_INSET = 0.008;
+
 export const activePage = (): Page | null =>
   scan.pages.find((p) => p.id === scan.activeId) ?? null;
 
@@ -73,7 +78,6 @@ export function addPage(src: ImageData, name = "scan"): Page {
     warped: null,
     warpedSide: 0,
     result: null,
-    original: null,
     cacheKey: "",
     thumb: null,
     opts: defaultOpts(),
@@ -117,13 +121,13 @@ export type ProcessOptions = {
 };
 
 /**
- * Warp + enhance a page.
+ * Warp (+ optionally enhance) a page.
  *
- * Two caches make the editor feel instant:
+ * Two cached stages keep the editor feeling instant:
  *  - the warp is reused while the crop and the requested resolution are the
- *    same, so toggling Optimize costs one enhance pass, not a warp too;
- *  - an enhance pass already made for this exact combination is kept, so
- *    toggling back and forth is free.
+ *    same, so flipping Optimize costs one enhance pass, not a warp too;
+ *  - Optimize off is literally the warp, so turning it off is free and the
+ *    user really does get "the photo as taken", only straightened.
  */
 export async function processPage(page: Page, opts: ProcessOptions = {}): Promise<void> {
   const { full = false, rewriteWarp = false, force = false } = opts;
@@ -138,22 +142,15 @@ export async function processPage(page: Page, opts: ProcessOptions = {}): Promis
   await nextFrame();
 
   if (!page.warped || rewriteWarp || page.warpedSide !== maxSide) {
-    // pulled in a hair: detection and hand-placed corners both tend to sit just
-    // outside the paper, and that sliver of desk becomes a dark edge
-    const quad = insetQuad(page.quad, 0.005);
+    const quad = insetQuad(page.quad, EDGE_INSET);
     const size = outputSize(quad, maxSide);
     page.warped = markRaw(warp(page.src, quad, size.w, size.h));
     page.warpedSide = maxSide;
-    page.original = null;
   }
 
-  const mode = modeFor(page.opts);
-  if (mode === "color" && page.original) {
-    page.result = page.original;
-  } else {
-    page.result = markRaw(enhance(page.warped, { mode, brightness: 0, contrast: 0, strength: 58 }));
-    if (mode === "color") page.original = page.result;
-  }
+  page.result = page.opts.optimize
+    ? markRaw(enhance(page.warped, { mode: "bw", brightness: 0, contrast: 0, strength: 58 }))
+    : page.warped;
   page.cacheKey = key;
   if (full) page.thumb = makeThumb(page.result);
 }
