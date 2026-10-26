@@ -70,7 +70,34 @@ button {
   background: none;
   padding: 0;
   cursor: pointer;
+  /* Tapping a control twice must never select its label, and a long press on
+     iOS must not pop the callout over the shutter. */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
 }
+
+/* Labels inside controls are part of the control, not text to copy. Icons and
+   decorative chips included, so a stray drag cannot leave a blue selection. */
+.brand,
+.dock-label,
+.look-label,
+.zoom-chip,
+.zoom-value,
+.paper,
+.editor-count,
+.review-count,
+.page-num,
+.name-label,
+.pages-count,
+.camera-hint,
+.frame-hint,
+.scan-label {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* The file name field stays selectable: that text is the user's own. */
 
 button:disabled {
   cursor: not-allowed;

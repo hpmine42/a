@@ -19,11 +19,6 @@
 
 **Live: <https://hpmine42.github.io/scano/>** — no install, no account.
 
-> **Renaming notice.** The repository is being renamed to `scano`, so the live
-> URL moves from `hpmine42.github.io/scanner/` to `hpmine42.github.io/scano/`.
-> Old bookmarks keep working through GitHub's redirect, but the installed app
-> should be re-added from the new address.
-
 You need one page as a PDF. So you take a phone photo — crooked, grey, a shadow
 across the bottom, half the desk in frame — and every scanner app wants an
 account and an upload.
@@ -170,9 +165,20 @@ The B&W output runs a despeckle pass after the adaptive threshold: paper grain
 and JPEG noise become visible dirt once a page is pure black and white, and
 isolated pixels are not glyphs.
 
-CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs typecheck, both
-test suites and the build on every push and PR, then deploys `main` to GitHub
-Pages.
+## Deployment
+
+CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on every push
+to `main`, on every pull request, **on a daily schedule** and on demand. The
+build job typechecks, runs both test suites and builds; the deploy job publishes
+to GitHub Pages, then loads the live URL and checks that the served
+`index.html` is the built one and that `manifest.webmanifest` and `sw.js`
+resolve — a deploy that published nothing turns the run red instead of leaving a
+white page.
+
+`configure-pages` runs with `enablement: true`, so if Pages is not set up for a
+fork, a renamed repository or a reset environment, the workflow creates it
+itself instead of waiting for a manual click. Nothing about deployment depends
+on a setting someone has to remember.
 
 ## Keyboard and desktop
 
