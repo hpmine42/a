@@ -11,6 +11,7 @@ import {
   shouldOfferInstall,
   watchInstallPrompt,
 } from "../lib/install";
+import { coverPoint } from "../lib/geometry";
 import { tap, thump } from "../lib/haptics";
 import { IMPORT_MAX } from "../lib/store";
 
@@ -501,11 +502,20 @@ async function focusAt(clientX: number, clientY: number) {
   }
   if (!map || !v?.videoWidth) return;
 
-  /** The tap, as the camera's normalised coordinates (0..1 of the frame). */
-  const point = {
-    x: Math.min(1, Math.max(0, (x - map.dx) / (v.videoWidth * map.scale))),
-    y: Math.min(1, Math.max(0, (y - map.dy) / (v.videoHeight * map.scale))),
-  };
+  /**
+   * The tap, as the camera's normalised coordinates (0..1 of the frame).
+   *
+   * `softZoom` is part of the answer: when the lens has no hardware zoom the
+   * preview is scaled in CSS instead, so the picture under the finger is a
+   * magnified crop of the frame — not the frame itself. Mapping without it put
+   * the focus point closer to the middle than the ring the user had just seen.
+   */
+  const point = coverPoint(
+    { x, y },
+    map,
+    { w: v.videoWidth, h: v.videoHeight },
+    softZoom.value
+  );
   const canSingleShot = focusModes.includes("single-shot");
 
   /**

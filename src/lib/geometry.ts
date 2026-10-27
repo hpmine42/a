@@ -56,6 +56,42 @@ export function clampToBox(
   };
 }
 
+export type CoverFit = { scale: number; dx: number; dy: number; w: number; h: number };
+
+/**
+ * Where a tap on the viewfinder lands in the camera's own frame, 0..1.
+ *
+ * Two things scale between the finger and the sensor, and it is easy to account
+ * for only one of them. The frame is drawn with `object-fit: cover`, which is the
+ * `scale`/`dx`/`dy` of `coverRect()`; and on a lens that admits to no hardware
+ * zoom the preview layer itself is CSS-scaled by `preview` around the middle of
+ * the stage. A tap is in stage pixels, `pointsOfInterest` wants a fraction of the
+ * frame.
+ *
+ * Forget the preview scale and the ring appears under the finger while the lens
+ * focuses somewhere towards the middle of the page — a "tap to focus" that
+ * quietly does nothing visible, the same way a crosshair drawn through the
+ * magnifier's zoom quietly disappeared.
+ */
+export function coverPoint(
+  tap: { x: number; y: number },
+  map: CoverFit,
+  frame: { w: number; h: number },
+  preview = 1
+): { x: number; y: number } {
+  const k = Number.isFinite(preview) && preview > 0 ? preview : 1;
+  // undo the preview scale around the stage's centre, back to layer pixels
+  const cx = map.w / 2;
+  const cy = map.h / 2;
+  const lx = cx + (tap.x - cx) / k;
+  const ly = cy + (tap.y - cy) / k;
+  const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
+  return {
+    x: clamp01((lx - map.dx) / Math.max(1e-6, frame.w * map.scale)),
+    y: clamp01((ly - map.dy) / Math.max(1e-6, frame.h * map.scale)),
+  };
+}
+
 export type Segment = { x1: number; y1: number; x2: number; y2: number };
 
 /**

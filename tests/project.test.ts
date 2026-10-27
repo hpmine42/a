@@ -291,7 +291,10 @@ describe("text recognition", () => {
   it("reads the finished page at a size where letters still exist", () => {
     // 900 (the preview) merges letters; the export size only costs time
     expect(store).toMatch(/export const OCR_SIDE = 1800;/);
-    expect(store).toMatch(/processPage\(page, \{ full: true, maxSide: OCR_SIDE \}\)/);
+    // a copy at that size, not the page itself: rendering the preview at the
+    // engine's resolution replaced the sheet on screen with a smaller one
+    expect(store).toMatch(/const result = renderCopy\(page, OCR_SIDE\);/);
+    expect(store).not.toMatch(/processPage\(page, \{ full: true, maxSide: OCR_SIDE \}\)/);
   });
 
   it("runs from our own origin, in a worker, with no CDN in the path", () => {
