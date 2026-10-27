@@ -152,7 +152,10 @@ behind it really did break table rules into dashes.
   propped up and both hands are busy with the book.
 - **Two pages in one photo** (an open book, two receipts): the detector looks
   for a second, non-overlapping sheet and, when it finds one, the review sheet
-  shows both outlines and asks *Scan both pages* or *Just the first one*.
+  shows both outlines and asks — *Scan both pages*, *Just the first one*, or
+  *Crop it myself*, which opens the corners on the marked page. Finding two
+  sheets is not a reason to take the crop tool away: when the outline itself is
+  wrong, "scan both" and "scan half of it" are both the wrong answer.
 - **Pinch to zoom in the viewfinder**, with 0.5× / 1× / 2× chips and a switch to
   the ultra-wide lens when the phone exposes one. Everywhere else the app holds
   pinch-to-zoom shut, because it only ever fights the user.
