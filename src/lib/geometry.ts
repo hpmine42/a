@@ -92,38 +92,23 @@ export function coverPoint(
   };
 }
 
-export type Segment = { x1: number; y1: number; x2: number; y2: number };
-
 /**
- * The crosshair inside the magnifier.
+ * The mark in the middle of the magnifier.
  *
- * Four arms that stop short of the centre, plus a small ring around the exact
- * pixel: the arms say "look here", the gap and the ring leave the pixel itself
- * visible — which is the whole point of a loupe when you are deciding whether the
- * corner is on the paper's edge or one pixel outside it.
+ * One small ring around the exact pixel under the corner — nothing else. It used
+ * to be a full crosshair, four arms reaching out towards the edge of the loupe;
+ * on a sheet of printed text those arms cut straight through the words you were
+ * trying to line a corner up with, and they pulled the eye away from the only
+ * thing that matters in a loupe, which is the centre. A ring says "this pixel"
+ * without covering it.
  *
- * Pure and in screen coordinates on purpose. It used to be drawn *through* the
- * transform that magnifies the photo, i.e. screen numbers fed into a source-pixel
- * space, so the crosshair landed far outside the circle and never showed up at
- * all. Geometry that has to be in one space is worth testing in that space.
+ * Pure and in screen coordinates on purpose: it is drawn *after* the magnifying
+ * transform, and drawing it through that transform is what once made it land
+ * hundreds of pixels outside the circle and disappear.
  */
-export function reticle(
-  cx: number,
-  cy: number,
-  radius: number,
-  gap = 7,
-  ring = 4
-): { lines: Segment[]; ring: number } {
-  // the arms start outside the ring, so the ring never sits on top of a line
-  const inner = gap + ring;
-  const outer = Math.max(inner + 6, radius - 6);
-  return {
-    lines: [
-      { x1: cx - outer, y1: cy, x2: cx - inner, y2: cy },
-      { x1: cx + inner, y1: cy, x2: cx + outer, y2: cy },
-      { x1: cx, y1: cy - outer, x2: cx, y2: cy - inner },
-      { x1: cx, y1: cy + inner, x2: cx, y2: cy + outer },
-    ],
-    ring,
-  };
+export function centreMark(radius: number): number {
+  // grows with the loupe, but only gently: a dot that scales 1:1 turns into a
+  // target ring, and this is a magnifier, not a rifle scope
+  const scale = Number.isFinite(radius) && radius > 0 ? radius : 58;
+  return Math.max(3.5, Math.min(7, scale * 0.086));
 }
