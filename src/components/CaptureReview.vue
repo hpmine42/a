@@ -34,9 +34,8 @@ const canvas = ref<HTMLCanvasElement | null>(null);
 const host = ref<HTMLDivElement | null>(null);
 let observer: ResizeObserver | null = null;
 let raf = 0;
-/** 0..1 over the reveal, or -1 when there is nothing to animate. */
-let reveal = -1;
-let sweep = 0;
+/** Clock for the current animation: the sweep cycles, the reveal runs once. */
+let phaseStart = 0;
 
 const title = computed(() => {
   if (props.phase === "searching") return "Looking for the page…";
@@ -98,7 +97,13 @@ function draw() {
   if (props.phase === "searching") {
     // a single bright band travelling down the photo: the honest picture of
     // "one pass over the photo", and it finishes when the pass does
+    const sweep = ((performance.now() - phaseStart) / 850) % 1;
     const y = dy + dh * (0.04 + sweep * 0.92);
+    // the band belongs to the photo, not to the sheet around it
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(dx, dy, dw, dh);
+    ctx.clip();
     const band = ctx.createLinearGradient(0, y - 60, 0, y + 60);
     band.addColorStop(0, "rgba(255, 192, 97, 0)");
     band.addColorStop(0.5, "rgba(255, 192, 97, 0.3)");
@@ -111,13 +116,16 @@ function draw() {
     ctx.lineWidth = 2;
     ctx.strokeStyle = "rgba(255, 214, 152, 0.95)";
     ctx.stroke();
+    ctx.restore();
     ctx.strokeStyle = "rgba(255, 255, 255, 0.16)";
     ctx.lineWidth = 1;
     ctx.strokeRect(dx + 0.5, dy + 0.5, dw - 1, dh - 1);
   }
 
   if (props.phase === "found" && props.found) {
-    const t = reveal < 0 ? 1 : reveal;
+    const t = prefersReducedMotion()
+      ? 1
+      : Math.min(1, (performance.now() - phaseStart) / 280);
     const grow = 1 + (1 - t) * 0.06;
     const cx = dx + dw / 2;
     const cy = dy + dh / 2;
@@ -167,18 +175,16 @@ function draw() {
 function frame() {
   raf = 0;
   draw();
-  const live = props.phase === "searching" || reveal >= 0;
-  if (!live) return;
-
-  if (props.phase === "searching") sweep = (sweep + 0.055) % 1;
-  if (reveal >= 0) {
-    reveal = Math.min(1, reveal + 0.14);
-    if (reveal >= 1) {
-      reveal = 1;
-      return; // the last frame is already drawn and there is nothing left to do
+  if (props.phase === "searching") {
+    raf = requestAnimationFrame(frame);
+    return;
+  }
+  if (props.phase === "found") {
+    // the reveal runs once: 280ms of corners settling, then the last frame stays
+    if (!prefersReducedMotion() && performance.now() - phaseStart < 260) {
+      raf = requestAnimationFrame(frame);
     }
   }
-  raf = requestAnimationFrame(frame);
 }
 
 function kick() {
@@ -188,15 +194,8 @@ function kick() {
 
 watch(
   () => props.phase,
-  (phase) => {
-    if (phase === "searching") {
-      sweep = 0;
-      reveal = -1;
-    } else if (phase === "found") {
-      reveal = prefersReducedMotion() ? -1 : 0;
-    } else {
-      reveal = -1;
-    }
+  () => {
+    phaseStart = performance.now();
     kick();
   }
 );

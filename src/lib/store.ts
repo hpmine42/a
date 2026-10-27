@@ -43,8 +43,6 @@ export const IMPORT_MAX = 3600;
 export const PREVIEW_MAX = 2400;
 /** The first look after a shot: sharp on screen, cheap enough to feel instant. */
 export const FIRST_RENDER = 1400;
-/** While the crop tool is open the preview is only needed small. */
-export const CROP_MAX = 1200;
 export const EXPORT_MAX = 3000;
 
 export const scan = reactive({

@@ -210,6 +210,8 @@ function looksFrozen(): boolean {
   if (!ready.value) return false;
   const track = stream?.getVideoTracks()[0];
   if (!track || track.readyState === "ended") return true;
+  // a stream that reports no frame size cannot be photographed either
+  if (!video.value?.videoWidth) return true;
   return performance.now() - lastFrameAt > 1400;
 }
 

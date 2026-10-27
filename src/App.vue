@@ -107,6 +107,9 @@ async function chooseAuto() {
   const img = pending.value;
   if (!img || reviewBusy.value) return;
   const token = ++reviewToken;
+  /** Did the user leave this sheet while the work was running? */
+  const abandoned = () => token !== reviewToken;
+
   reviewBusy.value = true;
   busy = true;
   const started = performance.now();
@@ -119,17 +122,19 @@ async function chooseAuto() {
     const quad = safeDetect(img);
     const elapsed = performance.now() - started;
     if (elapsed < 300) await sleep(300 - elapsed);
-    // Discard pressed while the detector was running: their photo, their call
-    if (token !== reviewToken) return;
+    if (abandoned()) return;
 
     if (quad) {
       reviewFound.value = quad;
       reviewPhase.value = "found";
       await sleep(360);
+      // Discard may have been pressed while the corners were settling
+      if (abandoned()) return;
       await applyDetected(img, quad);
     } else {
       reviewPhase.value = "miss";
       await sleep(420);
+      if (abandoned()) return;
       const page = addPage(img, "scan");
       page.quad = fullFrameQuad(img.width, img.height);
       page.warped = null;
@@ -139,8 +144,7 @@ async function chooseAuto() {
       view.value = "edit";
     }
   } finally {
-    pending.value = null;
-    if (token === reviewToken) {
+    if (!abandoned()) {
       pending.value = null;
       reviewPhase.value = "idle";
       reviewFound.value = null;

@@ -219,6 +219,24 @@ describe("capture without a page", () => {
     wrapper.unmount();
   });
 
+  it("honours Discard even while the detector is still running", async () => {
+    stubDemoFetch();
+    const wrapper = mount(App);
+    await tick(20);
+    await shootDemo(wrapper);
+
+    const auto = wrapper.findAll("button.choice").find((b) => b.text().includes("Find the page"))!;
+    await auto.trigger("click");
+    await tick(40);
+    await wrapper.find('button[aria-label="Discard photo and go back"]').trigger("click");
+    await tick(1200);
+
+    // no page appears out of a photo the user threw away
+    expect(scan.pages.length).toBe(0);
+    expect(wrapper.find(".camera").exists()).toBe(true);
+    wrapper.unmount();
+  });
+
   it("does not blame detection for a photo that was uploaded", async () => {
     stubDemoFetch();
     const wrapper = mount(App);
