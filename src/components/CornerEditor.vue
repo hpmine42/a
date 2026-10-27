@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { Pt, Quad } from "../lib/cv";
-import { prefersReducedMotion } from "../lib/anim";
+import { prefersReducedMotion, SWEEP_MS } from "../lib/anim";
 import { canvasFor } from "../lib/image";
 import { clampToBox, containFit, loupeSourceRect, toImagePoint, type Fit } from "../lib/geometry";
 
@@ -48,13 +48,22 @@ function markDirty() {
 
 /* ------------------------------------------------------------------- sweep */
 
+/**
+ * One pass, top to bottom.
+ *
+ * It used to loop and to be cut short the moment the detector answered, so the
+ * band stopped somewhere in the middle of the sheet — which is exactly what made
+ * the scan look like it gave up halfway. `runAuto` now waits for this pass.
+ */
 function startSweep() {
   if (sweepRaf || prefersReducedMotion()) return;
+  sweep = 0;
   const start = performance.now();
   const step = (now: number) => {
-    sweep = ((now - start) / 1150) % 1;
+    sweep = Math.min(1, (now - start) / SWEEP_MS);
     markDirty();
-    sweepRaf = requestAnimationFrame(step);
+    if (sweep < 1) sweepRaf = requestAnimationFrame(step);
+    else sweepRaf = 0;
   };
   sweepRaf = requestAnimationFrame(step);
 }
@@ -174,7 +183,7 @@ function render() {
   if (props.searching) {
     const top = f.dy;
     const height = props.src.height * f.scale;
-    const y = top + height * (0.08 + sweep * 0.84);
+    const y = top + height * (0.02 + sweep * 0.96);
     g.save();
     g.beginPath();
     g.moveTo(pts[0].x, pts[0].y);
@@ -187,12 +196,14 @@ function render() {
     band.addColorStop(1, "rgba(255, 192, 97, 0)");
     g.fillStyle = band;
     g.fillRect(f.dx, y - 46, props.src.width * f.scale, 92);
+    g.globalAlpha = sweep > 0.9 ? Math.max(0, 1 - (sweep - 0.9) / 0.1) : 1;
     g.beginPath();
     g.moveTo(f.dx, y);
     g.lineTo(f.dx + props.src.width * f.scale, y);
     g.lineWidth = 2;
     g.strokeStyle = "rgba(255, 214, 152, 0.9)";
     g.stroke();
+    g.globalAlpha = 1;
     g.restore();
   }
 

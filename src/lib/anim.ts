@@ -11,6 +11,16 @@ export type Pt = { x: number; y: number };
 
 export const easeOutCubic = (t: number): number => 1 - Math.pow(1 - t, 3);
 
+/**
+ * How long one detection sweep takes to travel a page, top to bottom.
+ *
+ * The sweep is the promise that the app is looking, and a promise that stops
+ * halfway is worse than no animation at all: it reads as "the scan happened in
+ * the middle of the page". So it is a single pass with a fixed length, shared by
+ * the review sheet and the crop tool, and detection simply waits for it.
+ */
+export const SWEEP_MS = 620;
+
 export const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => window.setTimeout(resolve, ms));
 

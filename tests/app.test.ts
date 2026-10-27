@@ -7,6 +7,30 @@ import { allowCamera, denyCamera, fakeCamera, fakeCanvas, installDomStubs } from
 
 installDomStubs();
 
+/**
+ * The demo photo is a valid but blank JPEG, so real detection finds nothing in
+ * it. That is fine for most flows; the tests that need a *found* page say so
+ * here instead of pretending a blank image has one.
+ */
+const detect = vi.hoisted(() => ({ quads: [] as { x: number; y: number }[][] }));
+
+/** A plausible sheet inside the 240x320 stub photo. */
+const PAGE_QUAD = [
+  { x: 20, y: 18 },
+  { x: 222, y: 24 },
+  { x: 218, y: 300 },
+  { x: 24, y: 296 },
+];
+
+vi.mock("../src/lib/cv", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/lib/cv")>();
+  return {
+    ...actual,
+    detectPageQuad: () => detect.quads[0] ?? null,
+    detectPageQuads: () => detect.quads,
+  };
+});
+
 /** A tiny but valid JPEG: the stub pipeline only needs *some* pixels. */
 const DEMO_JPEG = Uint8Array.from([
   0xff, 0xd8, 0xff, 0xdb, 0x00, 0x04, 0x00, 0x00, 0xff, 0xc0, 0x00, 0x0b, 0x08, 0x00, 0x01, 0x00,
@@ -58,6 +82,7 @@ async function choose(wrapper: VueWrapper, label: string) {
 
 beforeEach(() => {
   useProjectStore(null);
+  detect.quads = [];
   fakeCamera.reset();
   fakeCanvas.reset();
   clearPages();
@@ -223,6 +248,51 @@ describe("capture without a page", () => {
     wrapper.unmount();
   });
 
+  it("stops on the found page and lets the user agree with it", async () => {
+    detect.quads = [PAGE_QUAD];
+    stubDemoFetch();
+    const wrapper = mount(App);
+    await tick(20);
+    await shootDemo(wrapper);
+    await choose(wrapper, "Find the page automatically");
+    await tick(900);
+
+    // the search ends on the sheet, with the outline drawn — not with a jump
+    // into an editor the user did not ask for
+    expect(wrapper.find(".review").exists()).toBe(true);
+    expect(wrapper.text()).toContain("Page found");
+    expect(wrapper.text()).toContain("Use this crop");
+    expect(wrapper.text()).toContain("Crop it myself");
+    expect(scan.pages.length).toBe(0);
+
+    const confirm = wrapper.findAll("button.choice").find((b) => b.text().includes("Use this crop"))!;
+    await confirm.trigger("click");
+    await tick(700);
+
+    expect(scan.pages.length).toBe(1);
+    expect(wrapper.find(".editor").exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  it("keeps the found corners when the user prefers to crop by hand", async () => {
+    detect.quads = [PAGE_QUAD];
+    stubDemoFetch();
+    const wrapper = mount(App);
+    await tick(20);
+    await shootDemo(wrapper);
+    await choose(wrapper, "Find the page automatically");
+    await tick(900);
+
+    const adjust = wrapper.findAll("button.choice").find((b) => b.text().includes("Crop it myself"))!;
+    await adjust.trigger("click");
+    await tick(400);
+
+    expect(wrapper.find(".corner-editor").exists()).toBe(true);
+    // the detector already ran: the tool opens on its answer, not on the frame
+    expect(scan.pages[0].quad).toEqual(PAGE_QUAD);
+    wrapper.unmount();
+  });
+
   it("honours Discard even while the detector is still running", async () => {
     stubDemoFetch();
     const wrapper = mount(App);
@@ -288,17 +358,23 @@ describe("capture without a page", () => {
     wrapper.unmount();
   });
 
-  it("falls back to manual cropping when the detector finds nothing", async () => {
+  it("says nothing was found and leaves the choice on the sheet", async () => {
     stubDemoFetch();
     const wrapper = mount(App);
     await tick(20);
     await shootDemo(wrapper);
     await choose(wrapper, "Find the page automatically");
-    // the sweep has to be seen, then the "nothing found" state, then the tool
-    await tick(700);
+    // the sweep has to be seen, then the answer has to be read
+    await tick(900);
 
+    // a failed search is an answer, not a reason to open a tool nobody asked for
+    expect(wrapper.find(".review").exists()).toBe(true);
+    expect(wrapper.text()).toContain("No page edge found");
+    expect(scan.pages.length).toBe(0);
+    expect(wrapper.findAll("button.choice").length).toBe(3);
+
+    await choose(wrapper, "Crop it by hand");
     expect(wrapper.find(".corner-editor").exists()).toBe(true);
-    expect(wrapper.find(".frame-hint").text()).toContain("No page edge found");
     wrapper.unmount();
   });
 
@@ -725,16 +801,18 @@ describe("focusing by tapping the picture", () => {
 
     expect(wrapper.find(".focus-ring").exists()).toBe(true);
     const asked = JSON.stringify(fakeCamera.applied);
+    // the first accepted request is the point itself; the lens then goes back to
+    // continuous (that is the "single-shot" in the log)
     expect(asked).toContain("pointsOfInterest");
-    expect(asked).toContain("single-shot");
-    // and it hands the lens back to continuous, or it would stay locked
+    await tick(1800);
+    expect(JSON.stringify(fakeCamera.applied)).toContain("continuous");
     expect(wrapper.find(".focus-note").exists()).toBe(false);
     wrapper.unmount();
   });
 
-  it("falls back to a plain refocus when the lens ignores focus points", async () => {
+  it("still answers a tap when the lens ignores the exact point", async () => {
     allowCamera();
-    // resolves, but reports nothing back: the browser ignored it
+    // resolves, but reports nothing back: the browser ignored the point
     fakeCamera.echo = false;
     fakeCamera.caps = { focusMode: ["continuous", "single-shot"] };
     const wrapper = mount(App);
@@ -743,11 +821,24 @@ describe("focusing by tapping the picture", () => {
     await tapStage(wrapper);
     await tick(30);
 
-    const asked = JSON.stringify(fakeCamera.applied);
-    expect(asked).toContain("focusMode");
-    // centred, because that is where the camera actually focuses
-    expect(wrapper.find(".focus-ring").exists()).toBe(false);
+    // the tap is always an answer: ring where the finger was, and a focus asked
+    expect(wrapper.find(".focus-ring").exists()).toBe(true);
+    expect(JSON.stringify(fakeCamera.applied)).toContain("pointsOfInterest");
+    expect(wrapper.find(".focus-note").exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("says so, once, when the lens cannot be asked at all", async () => {
+    allowCamera();
+    fakeCamera.failAll = true;
+    const wrapper = mount(App);
+    await tick(40);
+
+    await tapStage(wrapper);
+    await tick(30);
+
     expect(wrapper.find(".focus-note").exists()).toBe(true);
+    expect(wrapper.find(".focus-ring").exists()).toBe(true);
     wrapper.unmount();
   });
 

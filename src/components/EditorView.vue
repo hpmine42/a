@@ -3,7 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import CornerEditor from "./CornerEditor.vue";
 import Icon from "./Icon.vue";
 import type { Quad } from "../lib/cv";
-import { glideQuad, sleep } from "../lib/anim";
+import { glideQuad, sleep, SWEEP_MS } from "../lib/anim";
 import { click, tap } from "../lib/haptics";
 import { canvasFor, containFit } from "../lib/image";
 import { insetQuad, outputSize } from "../lib/cv";
@@ -58,6 +58,8 @@ const busy = ref(false);
 let busyTimer = 0;
 /** "Find the page" is running: the crop canvas shows a sweep of its own. */
 const searching = ref(false);
+/** "Done cropping" was tapped and the new page is being drawn. */
+const leavingCrop = ref(false);
 /** A failed search: the frame gives one small shake, then forgets it. */
 const missed = ref(false);
 let missTimer = 0;
@@ -121,7 +123,10 @@ function queueDraw() {
   if (drawFrame) return;
   drawFrame = requestAnimationFrame(() => {
     drawFrame = 0;
-    if (mode.value === "result") drawResult();
+    // Draw even while the crop tool is up: the canvas is hidden then, and having
+    // the new page already painted is what lets the switch be a cut instead of
+    // a jump from a stale picture to a fresh one.
+    drawResult();
   });
 }
 
@@ -206,18 +211,36 @@ async function toggleOptimize() {
   await setOptimize(!optimizing.value);
 }
 
-function toggleFrame() {
+/**
+ * In and out of the corner tool.
+ *
+ * Leaving is the delicate one: the page has to be warped again with the new
+ * corners, and that takes a moment. Switching to the result view first would
+ * show the *old* crop for a frame and then swap it — which is the wobble you get
+ * when a picture changes size twice in a tenth of a second. So the crop view stays
+ * up until the new page is actually drawn, and the switch is a single, clean cut
+ * with a short fade.
+ */
+async function toggleFrame() {
   tap();
-  mode.value = mode.value === "result" ? "frame" : "result";
   if (mode.value === "frame") {
-    // the corner tool works on the photo; nothing to render yet
-    notice.value = null;
-  } else {
-    // leaving the crop tool: this is the one pass that has to be on screen
-    void reprocess({ rewriteWarp: true })
-      .then(() => (cropDirty = false))
-      .catch(() => undefined);
+    leavingCrop.value = true;
+    try {
+      await reprocess({ rewriteWarp: true });
+      cropDirty = false;
+    } catch {
+      /* keep whatever is on screen rather than an empty stage */
+    }
+    mode.value = "result";
+    leavingCrop.value = false;
+    swapping.value = true;
+    window.clearTimeout(swapTimer);
+    swapTimer = window.setTimeout(() => (swapping.value = false), 220);
+    return;
   }
+  // the corner tool works on the photo; nothing to render yet
+  notice.value = null;
+  mode.value = "frame";
 }
 
 /**
@@ -298,9 +321,11 @@ async function runAuto() {
   const before = current.quad.map((p) => ({ ...p })) as Quad;
   tap();
   searching.value = true;
-  await sleep(140);
-
+  const started = performance.now();
   const found = autoDetect(current);
+  // The band gets its full pass even when the answer is already in: a sweep that
+  // stops at 60% is the thing that looked like a half-finished scan.
+  await sleep(Math.max(0, SWEEP_MS - (performance.now() - started)));
   searching.value = false;
 
   if (found) {
@@ -485,6 +510,7 @@ defineExpose({ openFrame: () => (mode.value = "frame") });
       <button
         v-if="mode === 'frame'"
         class="crop-done"
+        :disabled="leavingCrop"
         aria-label="Done cropping"
         @click="toggleFrame"
       >

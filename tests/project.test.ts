@@ -84,6 +84,24 @@ describe("camera top bar", () => {
   });
 });
 
+describe("the crop view stays still", () => {
+  const css = read("src/styles.css");
+
+  it("only shakes when a search actually failed", () => {
+    // This rule once read `.corner-canvas { animation: corner-miss ... }`, so
+    // the picture wobbled every single time the crop tool opened.
+    const canvas = css.slice(css.indexOf("\n.corner-canvas {"));
+    const rule = canvas.slice(0, canvas.indexOf("}"));
+    expect(rule).not.toMatch(/animation/);
+    expect(css).toMatch(/\.corner-editor\.missed \.corner-canvas \{[^}]*corner-miss/);
+  });
+
+  it("fades the crop view in instead of snapping to a different size", () => {
+    const block = css.slice(css.indexOf("\n.corner-editor {"));
+    expect(block.slice(0, block.indexOf("}"))).toMatch(/animation: corner-in/);
+  });
+});
+
 describe("readme", () => {
   const readme = read("README.md");
 

@@ -4,7 +4,7 @@ import CameraView from "./components/CameraView.vue";
 import CaptureReview from "./components/CaptureReview.vue";
 import EditorView from "./components/EditorView.vue";
 import PagesView from "./components/PagesView.vue";
-import { sleep } from "./lib/anim";
+import { sleep, SWEEP_MS } from "./lib/anim";
 import { detectPageQuads, fullFrameQuad, type Quad } from "./lib/cv";
 import { tap, thump } from "./lib/haptics";
 import { preloadPdfWhenIdle } from "./lib/pdf";
@@ -115,10 +115,13 @@ async function applyDetected(img: ImageData, quad: Quad) {
 /**
  * Let the detector have a go on the captured photo.
  *
- * The photo stays on the review sheet while it works, so the sweep is visible:
- * "one pass over the photo" should look like one pass over the photo. When the
- * sheet is found, its corners snap in before the editor opens — you can see
- * what the app picked instead of being teleported into a crop you did not make.
+ * The photo stays on the review sheet while it works, and the amber band makes
+ * one full pass from the top of the photo to the bottom — never a loop that
+ * stops wherever the detector finished, which made it look as if only the middle
+ * of the page had been scanned. When the band has travelled the page and the
+ * detector has an answer, the outline draws itself in and *nothing happens by
+ * itself*: the sheet waits, with "Use this crop" and "Crop it myself". A
+ * detection is a suggestion, not a decision.
  */
 async function chooseAuto() {
   const img = pending.value;
@@ -129,27 +132,23 @@ async function chooseAuto() {
 
   reviewBusy.value = true;
   busy = true;
-  let keepSheet = false;
   const started = performance.now();
   try {
     reviewPhase.value = "searching";
     reviewFound.value = null;
     reviewSecond.value = null;
-    // a sweep that vanishes in 80ms is a glitch, not an animation
-    await sleep(120);
 
     const quads = safeDetectMany(img);
+    // Let the band finish its pass even when the answer arrived early: an
+    // animation that stops at 80% is exactly the "halber Scan" this fixes.
     const elapsed = performance.now() - started;
-    if (elapsed < 300) await sleep(300 - elapsed);
+    if (elapsed < SWEEP_MS) await sleep(SWEEP_MS - elapsed);
     if (abandoned()) return;
 
     if (quads.length > 1) {
-      // Two sheets are a genuine choice, not a detection result: show both and
-      // let the sheet ask. Nothing is created until the user says which.
       reviewFound.value = quads[0];
       reviewSecond.value = quads[1];
       reviewPhase.value = "found";
-      keepSheet = true;
       return;
     }
 
@@ -157,33 +156,49 @@ async function chooseAuto() {
     if (quad) {
       reviewFound.value = quad;
       reviewPhase.value = "found";
-      await sleep(360);
-      // Discard may have been pressed while the corners were settling
-      if (abandoned()) return;
-      await applyDetected(img, quad);
     } else {
+      // Nothing found is still an answer: say so, and leave the three ways out
+      // on screen instead of opening a crop tool nobody asked for.
       reviewPhase.value = "miss";
-      await sleep(420);
-      if (abandoned()) return;
-      const page = addPage(img, "scan");
-      page.quad = fullFrameQuad(img.width, img.height);
-      page.warped = null;
-      editorMode.value = "frame";
-      editorNotice.value = "No page edge found — drag the corners";
-      editorReturn.value = "camera";
-      view.value = "edit";
     }
   } finally {
-    if (!abandoned() && !keepSheet) {
-      pending.value = null;
-      reviewPhase.value = "idle";
-      reviewFound.value = null;
-      reviewSecond.value = null;
-    }
     reviewBusy.value = false;
     busy = false;
-    pump();
   }
+}
+
+/** "Use this crop": agree with the outline and straighten it. */
+async function confirmFound() {
+  const img = pending.value;
+  const quad = reviewFound.value;
+  if (!img || !quad) return;
+  reviewToken++;
+  pending.value = null;
+  reviewPhase.value = "idle";
+  reviewFound.value = null;
+  reviewSecond.value = null;
+  tap();
+  await applyDetected(img, quad);
+}
+
+/** "Crop it myself" after a search: keep the found quad as the starting point. */
+function adjustFound() {
+  const img = pending.value;
+  if (!img) return;
+  reviewToken++;
+  pending.value = null;
+  reviewPhase.value = "idle";
+  tap();
+  const page = addPage(img, "scan");
+  // The detector already did the work — do not run it a second time
+  page.quad = reviewFound.value ?? fullFrameQuad(img.width, img.height);
+  page.warped = null;
+  reviewFound.value = null;
+  reviewSecond.value = null;
+  editorMode.value = "frame";
+  editorNotice.value = null;
+  editorReturn.value = "camera";
+  view.value = "edit";
 }
 
 /** "Scan both pages": one photo, two pages, the second prepared in the background. */
@@ -201,17 +216,9 @@ async function chooseBoth() {
   await applyMany(img, [first, second]);
 }
 
-/** "Just the first one": the same path as a normal single detection. */
+/** "Just the first one": the same path as agreeing with a single detection. */
 async function chooseFirst() {
-  const img = pending.value;
-  const quad = reviewFound.value;
-  if (!img || !quad) return;
-  reviewToken++;
-  pending.value = null;
-  reviewPhase.value = "idle";
-  reviewFound.value = null;
-  reviewSecond.value = null;
-  await applyDetected(img, quad);
+  await confirmFound();
 }
 
 /**
@@ -419,6 +426,8 @@ onBeforeUnmount(() => {
         @retake="retake"
         @both="chooseBoth"
         @single="chooseFirst"
+        @confirm="confirmFound"
+        @adjust="adjustFound"
       />
 
       <EditorView
