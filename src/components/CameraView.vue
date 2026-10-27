@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import Icon from "./Icon.vue";
 import type { Pt, Quad } from "../lib/cv";
-import { bitmapToImageData, cropRegion, imageDataFromFile } from "../lib/image";
+import { bitmapToImageData, cropRegion, imageDataFromFile, looksLikePhoto } from "../lib/image";
 import {
   installedRelatedApps,
   isStaleInstall,
@@ -27,12 +27,22 @@ type FocusConstraints = Omit<MediaTrackConstraints, "advanced"> & {
   advanced?: FocusConstraint[];
 };
 
-const props = defineProps<{ thumbs: string[]; pageCount: number; restored?: number }>();
+const props = defineProps<{
+  thumbs: string[];
+  pageCount: number;
+  restored?: number;
+  /** A picked photo is still being decoded (the app owns that work). */
+  decoding?: boolean;
+}>();
 const emit = defineEmits<{
   (
     e: "captured",
     payload: { img: ImageData; quad: Quad | null; auto: boolean; origin: "camera" | "upload" }
   ): void;
+  /** Photos picked from the library; the app opens them one at a time. */
+  (e: "files", files: File[]): void;
+  /** Something to tell the user that is not about the viewfinder. */
+  (e: "notice", message: string): void;
   (e: "open-pages"): void;
 }>();
 
@@ -804,7 +814,9 @@ async function capture() {
     }
     emit("captured", { img: cropped, quad, auto: autoOn.value, origin: "camera" });
   } catch (err) {
+    // A shutter that flashes and produces nothing is the worst kind of silence.
     console.error("[scanner] capture failed", err);
+    emit("notice", "The photo could not be taken — try again.");
   } finally {
     capturing = false;
   }
@@ -823,32 +835,31 @@ async function useDemo() {
     emit("captured", { img, quad: null, auto: false, origin: "upload" });
   } catch (err) {
     console.error("[scanner] demo photo unavailable", err);
+    emit("notice", "The demo photo did not load — check your connection, then try again.");
   } finally {
     loading.value = false;
   }
 }
 
-async function onFiles(event: Event) {
+/**
+ * Hand the picked files to the app.
+ *
+ * The picking happens here, the *opening* does not: as soon as the first photo
+ * is decoded the sheet replaces this camera, and a loop that lived here would be
+ * cut off after one photo. A file that cannot be a photo at all is still refused
+ * here, in words.
+ */
+function onFiles(event: Event) {
   const input = event.target as HTMLInputElement;
-  const files = Array.from(input.files ?? []).filter((f) => f.type.startsWith("image/"));
+  const picked = Array.from(input.files ?? []);
   input.value = "";
-  if (!files.length) return;
+  if (!picked.length) return;
   tap();
-  loading.value = true;
-  try {
-    for (const file of files) {
-      emit("captured", {
-        img: await imageDataFromFile(file, IMPORT_MAX),
-        quad: null,
-        auto: false,
-        origin: "upload",
-      });
-    }
-  } catch (err) {
-    console.error("[scanner] could not read the photo", err);
-  } finally {
-    loading.value = false;
+  if (!picked.some(looksLikePhoto)) {
+    emit("notice", "That file is not a photo — pick a JPEG or PNG.");
+    return;
   }
+  emit("files", picked);
 }
 
 /* ------------------------------------------------------------------ mount */
@@ -1030,7 +1041,7 @@ watch(autoOn, (on) => {
       </Transition>
 
       <Transition name="fade">
-        <div v-if="loading" class="camera-busy" role="status" aria-live="polite">
+        <div v-if="loading || props.decoding" class="camera-busy" role="status" aria-live="polite">
           <span class="spinner" />
           <span>Opening photo…</span>
         </div>

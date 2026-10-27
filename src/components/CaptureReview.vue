@@ -23,6 +23,8 @@ const props = defineProps<{
   found?: Quad | null;
   /** A second sheet in the same photo, when there is one. */
   extra?: Quad | null;
+  /** Photos picked together that are still waiting behind this one. */
+  queued?: number;
 }>();
 
 const emit = defineEmits<{
@@ -295,6 +297,8 @@ watch(() => props.src, draw);
       </button>
       <span class="review-count">
         {{ props.pageCount > 0 ? `Page ${props.pageCount + 1}` : "First page" }}
+        <!-- a batch import must say where the rest of it went -->
+        <template v-if="props.queued"> · {{ props.queued }} more waiting</template>
       </span>
       <span class="review-spacer" />
     </header>

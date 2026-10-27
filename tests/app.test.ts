@@ -84,6 +84,19 @@ async function finish(wrapper: VueWrapper) {
   await tick(120);
 }
 
+/** A picked file, with the MIME type the platform would report. */
+function photoFile(name: string, type = "image/jpeg"): File {
+  return new File([DEMO_JPEG], name, { type });
+}
+
+/** Drive the hidden file input the way a picker would. */
+async function pick(wrapper: VueWrapper, files: File[]) {
+  const input = wrapper.find('input[type="file"]');
+  expect(input.exists()).toBe(true);
+  Object.defineProperty(input.element, "files", { configurable: true, value: files });
+  await input.trigger("change");
+}
+
 async function choose(wrapper: VueWrapper, label: string) {
   const button = wrapper.findAll("button.choice").find((b) => b.text().includes(label));
   expect(button, `choice "${label}" must exist`).toBeTruthy();
@@ -419,6 +432,13 @@ describe("capture without a page", () => {
     await choose(wrapper, "Keep the whole photo");
     await tick(200);
 
+    // "no crop" has to mean no crop: not even the hairline inset that keeps a
+    // detected sheet's desk edge off the page
+    const page = scan.pages[0];
+    expect(page.whole).toBe(true);
+    expect(page.quad[0]).toEqual({ x: 0, y: 0 });
+    expect(page.quad[2]).toEqual({ x: page.src.width, y: page.src.height });
+
     // "no crop, no straightening" means exactly that: the finished page, no
     // corner tool in between — cropping stays one tap away in the header
     expect(scan.pages.length).toBe(1);
@@ -444,6 +464,90 @@ describe("capture without a page", () => {
     // the corner tool is a step the user asks for, not one they walk into
     expect(wrapper.find(".corner-editor").exists()).toBe(true);
     expect(wrapper.find("button.crop-done").exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  it("keeps every photo from one pick, not just the first", async () => {
+    stubDemoFetch();
+    const wrapper = mount(App);
+    await tick(20);
+
+    await pick(wrapper, [photoFile("one.jpg"), photoFile("two.jpg")]);
+    await tick(300);
+
+    expect(wrapper.find(".review").exists()).toBe(true);
+    // the rest of the batch is not a silent pile: the sheet says how many wait
+    expect(wrapper.text()).toContain("1 more waiting");
+
+    await choose(wrapper, "Keep the whole photo");
+    await tick(300);
+    expect(wrapper.find(".editor").exists()).toBe(true);
+
+    // finishing the first page starts the second instead of dropping it into
+    // an invisible queue
+    await wrapper.find("button.done").trigger("click");
+    await tick(400);
+    expect(wrapper.find(".review").exists()).toBe(true);
+    expect(wrapper.text()).toContain("Page 2");
+    expect(scan.pages.length).toBe(1);
+    wrapper.unmount();
+  });
+
+  it("opens a HEIC photo the picker labelled with no type at all", async () => {
+    // Android hands these over with an empty MIME type; a strict image/* filter
+    // used to swallow the whole selection and leave the app doing nothing
+    stubDemoFetch();
+    const wrapper = mount(App);
+    await tick(20);
+
+    await pick(wrapper, [photoFile("IMG_0042.HEIC", "")]);
+    await tick(300);
+
+    expect(wrapper.find(".review").exists()).toBe(true);
+    expect(wrapper.find(".app-note").exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("says which photo could not be opened instead of going quiet", async () => {
+    stubDemoFetch();
+    const original = globalThis.createImageBitmap;
+    globalThis.createImageBitmap = (async (file: File) => {
+      if (file.name.includes("broken")) throw new Error("no decoder");
+      return { width: 240, height: 320, close: () => undefined };
+    }) as unknown as typeof createImageBitmap;
+
+    const wrapper = mount(App);
+    await tick(20);
+    await pick(wrapper, [photoFile("good.jpg"), photoFile("broken.heic", "")]);
+    await tick(300);
+
+    // the readable one is open, and its neighbour did not cost it anything
+    expect(wrapper.find(".review").exists()).toBe(true);
+    expect(wrapper.find(".app-note").exists()).toBe(false);
+
+    // the next photo in the batch is opened when this one is done — and that is
+    // where the broken file has to introduce itself, in words
+    await choose(wrapper, "Keep the whole photo");
+    await tick(200);
+    await wrapper.find("button.done").trigger("click");
+    await tick(400);
+
+    expect(wrapper.find(".app-note").text()).toContain("1 of 2 photos could not be opened");
+    expect(wrapper.find(".camera").exists()).toBe(true);
+
+    globalThis.createImageBitmap = original;
+    wrapper.unmount();
+  });
+
+  it("refuses a file that is not a photo in words", async () => {
+    stubDemoFetch();
+    const wrapper = mount(App);
+    await tick(20);
+    await pick(wrapper, [new File([DEMO_JPEG], "invoice.pdf", { type: "application/pdf" })]);
+    await tick(200);
+
+    expect(wrapper.find(".app-note").text()).toContain("not a photo");
+    expect(wrapper.find(".review").exists()).toBe(false);
     wrapper.unmount();
   });
 

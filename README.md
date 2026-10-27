@@ -56,7 +56,12 @@ camera frame — desk, shadow, skew. After is what the export produces with
   (it shows exactly the pixel under your finger), or drag the whole sheet. The
   crop tool has exactly one button — *Done cropping* — and the page is rendered
   once on the way out, so dragging stays butter-smooth instead of warping a
-  photo on every finger lift.
+  photo on every finger lift. A page that was turned is drawn turned here too:
+  the corners you place are the corners you get (`src/lib/orient.ts`, where the
+  two frames of reference are translated and tested).
+- **"Keep the whole photo" is literal.** No hairline inset either. The page is
+  the frame the camera saw, edge to edge, which matters the moment text runs to
+  the paper's edge.
 - **Find the page, and *see* it.** Pressing *Find the page* runs one amber band
   from the top of the photo to the bottom — a single pass, never a loop that
   stops wherever the detector happened to finish — then frames what it found and
@@ -76,6 +81,10 @@ camera frame — desk, shadow, skew. After is what the export produces with
   the crop, the look and the rotation — the pixels come back when you open a
   page, so a twenty-page session costs one database read at launch, not a twenty
   second wait. Nothing is uploaded, and *Clear* wipes it.
+- **Ten photos at once, one at a time.** A batch from the library is opened
+  lazily — one decoded photo in memory, the rest still files — and the sheet says
+  how many are waiting. A file the browser cannot decode (an iPhone HEIC in
+  Chrome, say) is named in the open instead of being skipped in silence.
 - **Multi-page PDF** at up to 3000px per page — A4, US Letter, or a page that
   matches the scan exactly — with the file name typed in the app before saving.
   On a phone *Share* hands the PDF straight to the share sheet; the download is
@@ -216,6 +225,7 @@ src/components/   CameraView, CaptureReview, EditorView, CornerEditor, PagesView
 src/lib/cv.ts     detection, homography warp, enhancement — no dependencies
 src/lib/pdf.ts    jsPDF layout; fitOnPage is pure and unit-tested
 src/lib/store.ts  pages, options, the preview/export resolution budgets
+src/lib/orient.ts the photo frame ↔ the page frame, for turned pages
 src/lib/storage.ts IndexedDB (with an in-memory twin the tests drive)
 src/lib/share.ts  the share sheet, and the download it falls back to
 src/lib/fit.ts    the UI scale that undoes a browser's desktop-mode shrink
@@ -239,8 +249,10 @@ checks the corners against hand-measured coordinates, and fails the build if the
 detector drifts. `tests/detect.test.ts` renders synthetic desks — dark, warm,
 low-contrast, empty — and asserts both the found corners and the *refusal* to
 find a page where there is none. `tests/pdf.test.ts` covers the placement maths, because getting
-that wrong prints cropped documents, and `tests/geometry.test.ts` pins the
-canvas → image mapping that the magnifier depends on.
+that wrong prints cropped documents, `tests/geometry.test.ts` pins the
+canvas → image mapping that the magnifier depends on, and
+`tests/orient.test.ts` proves that cropping a turned page gives the same picture
+as turning the photo and cropping there.
 
 The B&W output runs a despeckle pass after the adaptive threshold: paper grain
 and JPEG noise become visible dirt once a page is pure black and white, and

@@ -50,6 +50,13 @@ export type Page = {
   cacheKey: string;
   thumb: string | null;
   opts: Opts;
+  /**
+   * The page *is* the photo: "Keep the whole photo" means no crop at all, so the
+   * usual hairline inset (which cleans up the desk edge a detector leaves) is
+   * switched off for it. Otherwise the label lies by ~3% per edge, and text that
+   * runs to the paper's edge loses its first letters.
+   */
+  whole: boolean;
 };
 
 /**
@@ -92,8 +99,20 @@ export const EDGE_INSET = 0.008;
  * no matter how sharp the pipeline is.
  */
 export function naturalSide(page: Page): number {
-  const size = outputSize(insetQuad(page.quad, EDGE_INSET), IMPORT_MAX);
+  const size = outputSize(cropQuad(page), IMPORT_MAX);
   return Math.max(64, Math.max(size.w, size.h));
+}
+
+/**
+ * The corners the renderer actually uses.
+ *
+ * Detection and hand-placed corners sit a few pixels outside the paper, and an
+ * inset keeps that sliver of desk off every page. A page made with "Keep the
+ * whole photo" has no such sliver — it is the photo — so it gets the frames the
+ * user saw, exactly.
+ */
+export function cropQuad(page: Pick<Page, "quad" | "whole">): Quad {
+  return page.whole ? page.quad : insetQuad(page.quad, EDGE_INSET);
 }
 
 export const activePage = (): Page | null =>
@@ -114,6 +133,7 @@ export function addPage(src: ImageData, name = "scan"): Page {
     cacheKey: "",
     thumb: null,
     opts: defaultOpts(),
+    whole: false,
   };
   scan.pages.push(page);
   scan.activeId = page.id;
@@ -125,6 +145,7 @@ export function autoDetect(page: Page): boolean {
   const quad = safeDetect(page.src);
   if (!quad) return false;
   page.quad = quad;
+  page.whole = false;
   page.warped = null;
   page.warpedSide = 0;
   return true;
@@ -177,7 +198,7 @@ export async function processPage(page: Page, opts: ProcessOptions = {}): Promis
   await nextFrame();
 
   if (!page.warped || rewriteWarp || page.warpedSide !== maxSide) {
-    const quad = insetQuad(page.quad, EDGE_INSET);
+    const quad = cropQuad(page);
     const size = outputSize(quad, maxSide);
     page.warped = markRaw(warp(page.src, quad, size.w, size.h));
     page.warpedSide = maxSide;
@@ -199,6 +220,7 @@ export function toggleOptimize(page: Page): void {
 /** Turn the page a quarter turn clockwise. */
 export function rotatePage(page: Page): void {
   page.rotation = (page.rotation + 90) % 360;
+  // a quarter turn does not crop anything: "whole" survives it
   // The warp is unchanged, so only the look cache has to go.
   page.result = null;
   page.cacheKey = "";
@@ -273,6 +295,15 @@ let saveTimer = 0;
 let saving = false;
 const dirty = new Set<number>();
 let metaDirty = false;
+/**
+ * Pages whose photo could not be encoded yet, and when to try again.
+ *
+ * They stay dirty until they are actually on disk. Dropping them (as this used
+ * to) meant one failed `toBlob` — a full disk, a private window, a phone under
+ * memory pressure — and the page was never written again: it survived the
+ * session and vanished on the next launch, with nothing to see in between.
+ */
+const retry = new Map<number, { at: number; tries: number }>();
 
 /**
  * Write the project to the device, debounced. Called from the handful of places
@@ -331,13 +362,21 @@ export async function flushSave(): Promise<void> {
       if (!page) continue;
       const src = await encodeSource(page);
       // No photo, no record: writing `src: null` would replace a good copy on
-      // disk with a page that can never be opened or exported again.
-      if (!src) continue;
+      // disk with a page that can never be opened or exported again. Keep it
+      // dirty and try again a little later instead of forgetting it.
+      if (!src) {
+        const tries = (retry.get(id)?.tries ?? 0) + 1;
+        retry.set(id, { at: Date.now() + Math.min(8000, 500 * 2 ** (tries - 1)), tries });
+        dirty.add(id);
+        continue;
+      }
+      retry.delete(id);
       const record: StoredPage = {
         id: page.id,
         name: page.name,
         quad: page.quad.map((p) => ({ ...p })) as Quad,
         rotation: page.rotation,
+        whole: page.whole,
         optimize: page.opts.optimize,
         thumb: page.thumb,
         src,
@@ -352,8 +391,15 @@ export async function flushSave(): Promise<void> {
     /* a full disk or a private window: the session still works */
   } finally {
     saving = false;
-    // a change that arrived mid-write must not be the one that is lost
-    if (dirty.size || metaDirty) window.setTimeout(() => void flushSave(), 120);
+    // a change that arrived mid-write must not be the one that is lost — and a
+    // page that could not be written is retried on a widening delay, not in a
+    // tight loop
+    if (dirty.size || metaDirty) {
+      const now = Date.now();
+      const waiting = [...retry.values()].map((r) => r.at - now).filter((ms) => ms > 0);
+      const delay = Math.max(120, waiting.length ? Math.min(...waiting) : 120);
+      window.setTimeout(() => void flushSave(), delay);
+    }
   }
 }
 
@@ -404,6 +450,7 @@ export async function restoreProject(): Promise<number> {
       srcBlob: record.src,
       pending,
       rotation: record.rotation ?? 0,
+      whole: Boolean(record.whole),
       quad: record.quad,
       warped: null,
       warpedSide: 0,

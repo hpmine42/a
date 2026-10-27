@@ -9,11 +9,12 @@ import { detectPageQuads, fullFrameQuad, type Quad } from "./lib/cv";
 import { detectPageQuadsAsync } from "./lib/detect-async";
 import { tap, thump } from "./lib/haptics";
 import { preloadPdfWhenIdle } from "./lib/pdf";
-import { makeThumb, nextFrame } from "./lib/image";
+import { imageDataFromFile, looksLikePhoto, makeThumb, nextFrame } from "./lib/image";
 import {
   addPage,
   FIRST_RENDER,
   flushSave,
+  IMPORT_MAX,
   naturalSide,
   processPage,
   restoreProject,
@@ -49,6 +50,34 @@ const editorNotice = ref<string | null>(null);
 const restoredCount = ref(0);
 
 const queue: Shot[] = [];
+/**
+ * Photos picked in one go, still on their way in.
+ *
+ * The files themselves wait here, not decoded bitmaps: ten 3600px photos is
+ * about 400 MB of pixels, and decoding the lot before showing the first one is
+ * how a phone runs out of memory on an import that looks tiny in the picker.
+ */
+const incoming: File[] = [];
+/** Photos that could not be opened, so the count can be told honestly. */
+const failed: string[] = [];
+/** How many files the picker handed over in this batch. */
+let picked = 0;
+/** The last failure line shown, so it is not repeated word for word. */
+let lastFailure = "";
+/** A picked photo is being decoded right now. */
+const decoding = ref(false);
+/** How many photos are still waiting — a plain array is not reactive. */
+const queued = ref(0);
+
+/** A line about something that did not work — visible on every screen. */
+const appNotice = ref<string | null>(null);
+let appNoticeTimer = 0;
+function note(message: string) {
+  appNotice.value = message;
+  window.clearTimeout(appNoticeTimer);
+  appNoticeTimer = window.setTimeout(() => (appNotice.value = null), 6500);
+}
+
 /** Bumped whenever the review sheet is left, so a slow pass cannot resurrect it. */
 let reviewToken = 0;
 let busy = false;
@@ -57,6 +86,7 @@ let busy = false;
 
 function onCaptured(shot: Shot) {
   queue.push(shot);
+  queued.value = queue.length + incoming.length;
   pump();
 }
 
@@ -68,7 +98,12 @@ function onCaptured(shot: Shot) {
 function pump() {
   if (busy || view.value !== "camera") return;
   const next = queue.shift();
-  if (!next) return;
+  queued.value = queue.length + incoming.length;
+  if (!next) {
+    // nothing decoded in hand: the next picked photo can be opened now
+    void openNext();
+    return;
+  }
   if (next.quad) {
     busy = true;
     void applyDetected(next.img, next.quad).finally(() => {
@@ -87,7 +122,7 @@ function pump() {
 }
 
 /** Crop with a known quad, then show the result. */
-async function applyDetected(img: ImageData, quad: Quad) {
+async function applyDetected(img: ImageData, quad: Quad, whole = false) {
   scanThumb.value = makeThumb(img, 300, 400);
   scanning.value = true;
   thump();
@@ -95,6 +130,7 @@ async function applyDetected(img: ImageData, quad: Quad) {
   try {
     const page = addPage(img, "scan");
     page.quad = quad;
+    page.whole = whole;
     page.warped = null;
     // Enough pixels for the first look and for a sharp thumbnail — never more
     // than the photo actually has, or the page is born slightly soft.
@@ -111,6 +147,76 @@ async function applyDetected(img: ImageData, quad: Quad) {
   } finally {
     scanning.value = false;
   }
+}
+
+/* ------------------------------------------------------------- the library */
+
+/**
+ * Photos from the library, one at a time.
+ *
+ * `onFiles` only remembers the list; each file is decoded when the flow is ready
+ * for it (this is called again after every finished page), so a ten-photo import
+ * needs the memory of one photo. A file that cannot be decoded is reported and
+ * skipped — one HEIC in a selection must not cost the other nine.
+ */
+async function openNext(): Promise<void> {
+  if (decoding.value || busy || view.value !== "camera" || !incoming.length) return;
+  decoding.value = true;
+  try {
+    while (incoming.length) {
+      const file = incoming.shift()!;
+      queued.value = queue.length + incoming.length;
+      try {
+        const img = await imageDataFromFile(file, IMPORT_MAX);
+        onCaptured({ img, quad: null, auto: false, origin: "upload" });
+        return;
+      } catch (err) {
+        console.warn("[scano] could not open", file.name, err);
+        failed.push(file.name);
+        // say it now: the batch may still have readable photos, and the user
+        // should hear about the broken one before the next sheet opens
+        reportFailures(false);
+      }
+    }
+  } finally {
+    decoding.value = false;
+  }
+  reportFailures();
+}
+
+function reportFailures(reset = true): void {
+  if (!failed.length) {
+    if (reset) picked = 0;
+    return;
+  }
+  let message: string;
+  if (failed.length === picked) {
+    const heic = failed.some((name) => /\.(heic|heif)$/i.test(name));
+    message = heic
+      ? "This photo is HEIC, which this browser cannot open. Export it as JPEG, or take the photo with the camera instead."
+      : "This photo could not be opened — try a different one.";
+  } else {
+    message = `${failed.length} of ${picked} photos could not be opened.`;
+  }
+  // the same line twice in a row is noise, not information
+  if (message !== lastFailure) note(message);
+  lastFailure = reset ? "" : message;
+  if (!reset) return;
+  failed.length = 0;
+  picked = 0;
+}
+
+/** The picker handed over files: keep the photos, say something about the rest. */
+function onFiles(list: File[]): void {
+  const photos = list.filter(looksLikePhoto);
+  if (!photos.length) {
+    note("That file is not a photo — pick a JPEG or PNG.");
+    return;
+  }
+  incoming.push(...photos);
+  picked = photos.length;
+  queued.value = queue.length + incoming.length;
+  void openNext();
 }
 
 /**
@@ -353,7 +459,8 @@ async function chooseWhole() {
   // unmount the review and flash the pages grid for a frame.
   reviewBusy.value = true;
   try {
-    await applyDetected(img, fullFrameQuad(img.width, img.height));
+    // inset 0: "no crop" has to mean no crop, not "almost no crop"
+    await applyDetected(img, fullFrameQuad(img.width, img.height, 0), true);
   } finally {
     reviewBusy.value = false;
     pending.value = null;
@@ -388,10 +495,29 @@ function onEdit(id: number) {
 /** Leaving the editor: back where the user came from, never a surprise jump. */
 function leaveEditor() {
   if (editorReturn.value === "pages") {
-    view.value = "pages";
+    finishEditing();
     return;
   }
   goCamera();
+}
+
+/**
+ * Leaving a page.
+ *
+ * Photos picked in one go (or a burst of shots) wait in the queue. Dropping the
+ * user into the grid with only the first page — and the rest hidden until they
+ * happen to walk back to the camera — reads as "it imported one of my ten
+ * photos". So the next one starts straight away, and the sheet says how many are
+ * still waiting.
+ */
+function finishEditing() {
+  if (queue.length || incoming.length) {
+    // pump() only lifts photos while the camera is the current view
+    view.value = "camera";
+    pump();
+    return;
+  }
+  view.value = "pages";
 }
 
 function goCamera() {
@@ -444,6 +570,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   // a detection pass that is still running must not touch a closed app
   reviewToken++;
+  window.clearTimeout(appNoticeTimer);
   window.removeEventListener("keydown", onKey);
   window.removeEventListener("pagehide", flushNow);
   document.removeEventListener("visibilitychange", flushNow);
@@ -460,7 +587,10 @@ onBeforeUnmount(() => {
         :thumbs="scan.pages.map((p) => p.thumb).filter((t): t is string => !!t)"
         :page-count="scan.pages.length"
         :restored="restoredCount"
+        :decoding="decoding"
         @captured="onCaptured"
+        @files="onFiles"
+        @notice="note"
         @open-pages="view = 'pages'"
       />
 
@@ -475,6 +605,7 @@ onBeforeUnmount(() => {
         :phase="reviewPhase"
         :found="reviewFound"
         :extra="reviewSecond"
+        :queued="queued"
         @auto="chooseAuto"
         @manual="chooseManual"
         @whole="chooseWhole"
@@ -493,10 +624,16 @@ onBeforeUnmount(() => {
         :notice="editorNotice"
         :back-to="editorReturn"
         @back="leaveEditor"
-        @done="view = 'pages'"
+        @done="finishEditing"
       />
 
       <PagesView v-else key="pages" @back="goCamera" @edit="onEdit" @add="goCamera" />
+    </Transition>
+
+    <!-- A line about something that did not work, over whatever is on screen:
+         it must survive the sheet that opens right after a failed file. -->
+    <Transition name="fade">
+      <p v-if="appNotice" class="app-note" role="status" aria-live="polite">{{ appNotice }}</p>
     </Transition>
 
     <Transition name="scan">

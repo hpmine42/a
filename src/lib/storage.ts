@@ -19,6 +19,8 @@ export type StoredPage = {
   quad: Quad;
   /** 0 | 90 | 180 | 270 — applied at render time, never baked into the photo. */
   rotation: number;
+  /** "Keep the whole photo": no hairline inset, the page is the frame. */
+  whole?: boolean;
   optimize: boolean;
   /** Small preview so the grid is usable before any pixels are decoded. */
   thumb: string | null;
