@@ -1784,20 +1784,8 @@ img {
   background: rgba(255, 192, 97, 0.05);
 }
 
-.page-card.settled {
-  animation: card-settle 0.18s var(--ease);
-}
-
-@keyframes card-settle {
-  from {
-    transform: scale(0.94);
-    opacity: 0.6;
-  }
-  to {
-    transform: scale(1);
-    opacity: 1;
-  }
-}
+/* Landing is not an event: no fade, no pop. A card that goes translucent for a
+   moment under the finger reads as a glitch, not as a confirmation. */
 
 /* FLIP: when the order changes, cards glide into their new slots. Short on
    purpose — a long one makes the whole grid feel like it is lagging the finger. */
@@ -1819,7 +1807,6 @@ img {
     0 4px 12px rgba(0, 0, 0, 0.45);
   pointer-events: none;
   will-change: transform;
-  transform-origin: 50% 45%;
 }
 
 .drag-ghost img {

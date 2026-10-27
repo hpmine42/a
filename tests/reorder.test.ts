@@ -53,6 +53,13 @@ function slotCentre(index: number): { x: number; y: number } {
   };
 }
 
+/** jsdom has no PointerEvent; the browser properties are what the code reads. */
+function firePointer(target: EventTarget, type: string, x: number, y: number, pointerId = 1): void {
+  const event = new Event(type, { bubbles: true, cancelable: true });
+  Object.assign(event, { clientX: x, clientY: y, pointerId });
+  target.dispatchEvent(event);
+}
+
 const tick = async (ms = 0) => {
   await flushPromises();
   await new Promise((r) => setTimeout(r, ms));
@@ -161,6 +168,64 @@ describe("reordering pages", () => {
     await grip.trigger("pointerup", { pointerId: 1, clientX: start.x + 2, clientY: start.y + 1 });
     await tick(5);
     expect(order()).toEqual(before);
+    wrapper.unmount();
+  });
+
+  it("keeps dragging after the grid has rearranged under it", async () => {
+    const wrapper = await mountGrid(3);
+    const before = order();
+    await drag(wrapper, 0, 2);
+    expect(order()).toEqual([before[1], before[2], before[0]]);
+
+    // The reorder moves the card's DOM node to another slot. Pointer capture
+    // does not survive that — which is why the drag hangs half way in a real
+    // browser ("sobald sich die anderen verschieben, lässt es sich nicht mehr
+    // ziehen"). The page listens on window instead, so a move from anywhere
+    // still counts.
+    const first = slotCentre(0);
+    firePointer(document.body, "pointermove", first.x, first.y);
+    await tick(10);
+
+    // it went back to the first slot, which is the order we started from
+    expect(order()).toEqual(before);
+    // and the preview is still there, still following
+    expect(document.querySelector(".drag-ghost")).toBeTruthy();
+
+    firePointer(window, "pointerup", first.x, first.y);
+    await tick(10);
+    expect(document.querySelector(".drag-ghost")).toBeNull();
+    expect(wrapper.findAll(".page-card.dragging").length).toBe(0);
+    wrapper.unmount();
+  });
+
+  it("ends the drag when the browser cancels the gesture instead of hanging", async () => {
+    const wrapper = await mountGrid(3);
+    await drag(wrapper, 0, 2);
+
+    firePointer(window, "pointercancel", 100, 100);
+    await tick(10);
+
+    // nothing stays invisible, and nothing stays armed
+    expect(document.querySelector(".drag-ghost")).toBeNull();
+    expect(wrapper.findAll(".page-card.dragging").length).toBe(0);
+
+    // a new drag works immediately afterwards
+    const before = order();
+    await drag(wrapper, 0, 2);
+    expect(order()).toEqual([before[1], before[2], before[0]]);
+    wrapper.unmount();
+  });
+
+  it("does not blank the card before the drag has lifted", async () => {
+    const wrapper = await mountGrid(3);
+    const grip = wrapper.findAll(".page-grip")[0];
+    const start = slotCentre(0);
+    firePointer(grip.element, "pointerdown", start.x, start.y);
+
+    // a press, no movement yet: the card is fully there, no preview, no hole
+    expect(wrapper.findAll(".page-card.dragging").length).toBe(0);
+    expect(document.querySelector(".drag-ghost")).toBeNull();
+    firePointer(window, "pointerup", start.x, start.y);
     wrapper.unmount();
   });
 
