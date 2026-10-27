@@ -22,6 +22,17 @@ const PAGE_QUAD = [
   { x: 24, y: 296 },
 ];
 
+/**
+ * Pretend the photo has a page in it.
+ *
+ * The capture path asks the detector in a worker, and only falls back to the
+ * synchronous one when there is no worker at all — so both have to know.
+ */
+function setDetected(quads: { x: number; y: number }[][] = [PAGE_QUAD]) {
+  detect.quads = quads;
+  (globalThis as unknown as { __workerQuads?: unknown }).__workerQuads = quads;
+}
+
 vi.mock("../src/lib/cv", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/lib/cv")>();
   return {
@@ -83,6 +94,7 @@ async function choose(wrapper: VueWrapper, label: string) {
 beforeEach(() => {
   useProjectStore(null);
   detect.quads = [];
+  (globalThis as unknown as { __workerQuads?: unknown }).__workerQuads = [];
   fakeCamera.reset();
   fakeCanvas.reset();
   clearPages();
@@ -248,8 +260,29 @@ describe("capture without a page", () => {
     wrapper.unmount();
   });
 
+  it("waits for the whole sweep before it shows an answer", async () => {
+    // the detector answers at once; the band still gets its full pass
+    setDetected();
+    stubDemoFetch();
+    const wrapper = mount(App);
+    await tick(20);
+    await shootDemo(wrapper);
+
+    const auto = wrapper.findAll("button.choice").find((b) => b.text().includes("Find the page"))!;
+    await auto.trigger("click");
+    await tick(250);
+
+    expect(wrapper.text()).toContain("Looking for the page");
+    expect(wrapper.text()).not.toContain("Page found");
+    expect(wrapper.findAll("button.choice").length).toBe(0);
+
+    await tick(600);
+    expect(wrapper.text()).toContain("Page found");
+    wrapper.unmount();
+  });
+
   it("stops on the found page and lets the user agree with it", async () => {
-    detect.quads = [PAGE_QUAD];
+    setDetected();
     stubDemoFetch();
     const wrapper = mount(App);
     await tick(20);
@@ -275,7 +308,7 @@ describe("capture without a page", () => {
   });
 
   it("keeps the found corners when the user prefers to crop by hand", async () => {
-    detect.quads = [PAGE_QUAD];
+    setDetected();
     stubDemoFetch();
     const wrapper = mount(App);
     await tick(20);
@@ -500,6 +533,32 @@ describe("editor", () => {
     expect(wrapper.find(".pages").exists()).toBe(true);
     expect(page.result).not.toBe(before);
     expect(page.cacheKey).not.toBe("");
+    wrapper.unmount();
+  });
+
+  it("runs the full sweep in the crop tool before moving the corners", async () => {
+    // the crop tool opens on the whole photo (no sync guess), and only the
+    // worker search — triggered by the button — finds the page
+    detect.quads = [];
+    (globalThis as unknown as { __workerQuads?: unknown }).__workerQuads = [PAGE_QUAD];
+    stubDemoFetch();
+    const wrapper = mount(App);
+    await tick(20);
+    await shootDemo(wrapper);
+    await choose(wrapper, "Crop it by hand");
+    await tick(200);
+
+    const before = JSON.stringify(scan.pages[0].quad);
+    await wrapper.find(".auto-pill").trigger("click");
+    await tick(300);
+
+    // mid-pass: still searching, corners untouched
+    expect(JSON.stringify(scan.pages[0].quad)).toBe(before);
+    expect(wrapper.find(".frame-hint").text()).not.toContain("Page found");
+
+    await tick(700);
+    expect(wrapper.find(".frame-hint").text()).toContain("Page found");
+    expect(JSON.stringify(scan.pages[0].quad)).not.toBe(before);
     wrapper.unmount();
   });
 
