@@ -74,8 +74,10 @@ change ever makes the output worse, the picture gets worse with it.
   hand, detect this photo, or keep the whole frame — *Keep the whole photo* goes
   straight to the finished page, because the crop tool is exactly what it was
   just told not to use. Cropping stays one tap away in the page header.
-- **Manual framing that actually lands.** Drag any corner with a magnifier loupe
-  (it shows exactly the pixel under your finger), or drag the whole sheet. The
+- **Manual framing that actually lands.** Drag any corner with a magnifier loupe:
+  2.6×, with a **crosshair in the middle** — four arms, a gap and a small ring so
+  the pixel itself stays visible — drawn in screen space on top of the magnified
+  image (drawing it through the zoom transform is what once made it invisible)., or drag the whole sheet. The
   crop tool has exactly one button — *Done cropping* — and the page is rendered
   once on the way out, so dragging stays butter-smooth instead of warping a
   photo on every finger lift. A page that was turned is drawn turned here too:

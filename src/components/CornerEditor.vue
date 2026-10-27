@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { Pt, Quad } from "../lib/cv";
 import { prefersReducedMotion, SWEEP_MS } from "../lib/anim";
 import { canvasFor } from "../lib/image";
-import { clampToBox, containFit, loupeSourceRect, toImagePoint, type Fit } from "../lib/geometry";
+import { clampToBox, containFit, loupeSourceRect, reticle, toImagePoint, type Fit } from "../lib/geometry";
 import { applyView, quarter, sourceQuad, viewQuad, viewSize } from "../lib/orient";
 
 const props = defineProps<{
@@ -282,31 +282,42 @@ function drawLoupe(handle: Pt, f: Fit, w: number, h: number) {
   // The window is measured in the drawn (turned) frame, so the source has to be
   // turned the same way inside the clip — otherwise the loupe magnifies a spot
   // next to the corner it is attached to.
+  //
+  // The magnified image gets its own save/restore. Everything after it (the
+  // crosshair) is in screen coordinates, and drawing it through the scale
+  // transform is what made the cross vanish: those numbers were interpreted as
+  // source pixels, so it was painted hundreds of pixels outside the loupe and
+  // clipped away. That is why there was no cross in the middle.
   const img = canvasFor(props.src);
+  g.save();
   g.imageSmoothingQuality = "high";
   g.translate(centre.x - R, centre.y - R);
   g.scale((R * 2) / src.size, (R * 2) / src.size);
   g.translate(-src.sx, -src.sy);
   applyView(g, turn.value, props.src.width, props.src.height);
   g.drawImage(img, 0, 0);
+  g.restore();
 
-  // reticle marks the exact pixel under the corner
-  g.strokeStyle = "rgba(255, 192, 97, 0.95)";
-  g.lineWidth = 1;
-  g.beginPath();
-  g.moveTo(centre.x - 11, centre.y);
-  g.lineTo(centre.x - 4, centre.y);
-  g.moveTo(centre.x + 4, centre.y);
-  g.lineTo(centre.x + 11, centre.y);
-  g.moveTo(centre.x, centre.y - 11);
-  g.lineTo(centre.x, centre.y - 4);
-  g.moveTo(centre.x, centre.y + 4);
-  g.lineTo(centre.x, centre.y + 11);
-  g.stroke();
-  g.beginPath();
-  g.arc(centre.x, centre.y, 2, 0, Math.PI * 2);
-  g.fillStyle = "rgba(255, 192, 97, 0.95)";
-  g.fill();
+  /* Crosshair on the pixel under the corner: arms, a gap, and a ring around the
+   * exact pixel. Drawn twice — a dark halo first — so it reads on white paper as
+   * well as on the black edge of a desk. */
+  const marks = reticle(centre.x, centre.y, R);
+  g.lineCap = "round";
+  const cross = (width: number, colour: string) => {
+    g.lineWidth = width;
+    g.strokeStyle = colour;
+    g.beginPath();
+    for (const line of marks.lines) {
+      g.moveTo(line.x1, line.y1);
+      g.lineTo(line.x2, line.y2);
+    }
+    g.stroke();
+    g.beginPath();
+    g.arc(centre.x, centre.y, marks.ring, 0, Math.PI * 2);
+    g.stroke();
+  };
+  cross(4.8, "rgba(6, 7, 9, 0.6)");
+  cross(1.9, "#ffc061");
   g.restore();
 
   // ring + a hairline back to the handle, so it is obvious what is magnified
