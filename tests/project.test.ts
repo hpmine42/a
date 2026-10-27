@@ -142,23 +142,35 @@ describe("dragging a page", () => {
     expect(view).not.toMatch(/setPointerCapture/);
   });
 
-  it("draws the loupe crosshair in screen space, not through the zoom", () => {
-    // The cross used to be drawn after the magnifier's scale transform, so its
-    // screen coordinates were read as source pixels: it landed hundreds of
+  it("marks the middle of the loupe in screen space, not through the zoom", () => {
+    // The mark used to be drawn before the magnifier's transform was undone, so
+    // its screen coordinates were read as source pixels: it landed hundreds of
     // pixels outside the loupe and was clipped away ("kein Kreuz in der Mitte").
     const corner = read("src/components/CornerEditor.vue");
     const loupe = corner.slice(corner.indexOf("function drawLoupe("));
     const magnify = loupe.indexOf("g.drawImage(img, 0, 0);");
     const restore = loupe.indexOf("g.restore();", magnify);
-    const crosshair = loupe.indexOf("reticle(centre.x, centre.y, R)");
+    const mark = loupe.indexOf("centreMark(R)");
     expect(magnify).toBeGreaterThan(0);
     expect(restore).toBeGreaterThan(magnify);
-    // the crosshair comes after the transform is gone again
-    expect(crosshair).toBeGreaterThan(restore);
-    // and it is drawn twice: a dark halo, then amber, so white paper does not
-    // swallow it
-    expect(loupe).toMatch(/cross\(4\.8, "rgba\(6, 7, 9, 0\.6\)"\)/);
-    expect(loupe).toMatch(/cross\(1\.9, "#ffc061"\)/);
+    // the mark comes after the transform is gone again
+    expect(mark).toBeGreaterThan(restore);
+    // drawn twice: a dark halo, then amber, so white paper does not swallow it
+    expect(loupe).toMatch(/ring\(4\.4, "rgba\(6, 7, 9, 0\.62\)"\)/);
+    expect(loupe).toMatch(/ring\(1\.9, "#ffc061"\)/);
+  });
+
+  it("puts one ring in the middle of the loupe, not a crosshair over the words", () => {
+    // Arms are what the report asked to remove: on printed text they ran through
+    // the words around the corner and pointed the eye away from the centre.
+    const corner = read("src/components/CornerEditor.vue");
+    const loupe = corner.slice(corner.indexOf("function drawLoupe("));
+    expect(loupe).not.toMatch(/marks\.lines/);
+    expect(loupe).not.toMatch(/reticle\(/);
+    // one arc, centred on the pixel, and no straight lines in the mark at all
+    const mark = loupe.slice(loupe.indexOf("const mark = centreMark(R);"), loupe.indexOf("g.restore();", loupe.indexOf("const mark = centreMark(R);")));
+    expect(mark).toMatch(/g\.arc\(centre\.x, centre\.y, mark, 0, Math\.PI \* 2\)/);
+    expect(mark).not.toMatch(/lineTo|moveTo/);
   });
 
   it("does not tilt the preview and does not fade the card", () => {

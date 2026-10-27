@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  centreMark,
   clampToBox,
   containFit,
   coverPoint,
   loupeSourceRect,
-  reticle,
   toCanvasPoint,
   toImagePoint,
 } from "../src/lib/geometry";
@@ -86,62 +86,41 @@ describe("clampToBox", () => {
  * it landed outside the circle, clipped away. These tests pin the shape in the
  * space it is actually drawn in — screen coordinates inside the loupe.
  */
-describe("reticle", () => {
+describe("centreMark", () => {
   const R = 58;
 
-  it("has four arms, and they meet the centre symmetrically", () => {
-    const { lines } = reticle(200, 300, R);
-    expect(lines.length).toBe(4);
-    // two horizontal, two vertical
-    expect(lines.filter((l) => l.y1 === l.y2).length).toBe(2);
-    expect(lines.filter((l) => l.x1 === l.x2).length).toBe(2);
-    // centred on the point that is being looked at
-    const xs = lines.flatMap((l) => [l.x1, l.x2]);
-    const ys = lines.flatMap((l) => [l.y1, l.y2]);
-    expect(Math.min(...xs) + Math.max(...xs)).toBeCloseTo(400, 6);
-    expect(Math.min(...ys) + Math.max(...ys)).toBeCloseTo(600, 6);
+  it("marks the pixel and nothing else", () => {
+    // no arms: four lines reaching out of the centre cut through the words you
+    // are trying to line a corner up with, and pull the eye off the centre
+    const mark = centreMark(R);
+    expect(typeof mark).toBe("number");
+    expect(mark).toBeGreaterThan(3);
+    // a ring, not a target: it has to stay well inside the loupe
+    expect(mark).toBeLessThan(R / 4);
   });
 
-  it("stays inside the circle, so nothing gets clipped", () => {
-    for (const [cx, cy] of [
-      [60, 60],
-      [200, 300],
-      [340, 520],
-    ]) {
-      const { lines, ring } = reticle(cx, cy, R);
-      for (const line of lines) {
-        const inner = Math.hypot(line.x1 - cx, line.y1 - cy);
-        const outer = Math.hypot(line.x2 - cx, line.y2 - cy);
-        expect(outer).toBeLessThan(R - 4);
-        expect(inner).toBeGreaterThan(ring + 1);
-      }
+  it("is big enough to see and small enough to leave the pixel visible", () => {
+    const mark = centreMark(R);
+    // ~10px across on a 58px radius loupe: visible at arm's length, and the hole
+    // in the middle still shows the pixel underneath
+    expect(mark).toBeGreaterThanOrEqual(4);
+    expect(mark).toBeLessThanOrEqual(6.5);
+  });
+
+  it("follows a bigger loupe, within limits", () => {
+    expect(centreMark(90)).toBeGreaterThan(centreMark(40));
+    expect(centreMark(400)).toBeLessThanOrEqual(7);
+    expect(centreMark(4)).toBeGreaterThanOrEqual(3.5);
+  });
+
+  it("survives a nonsense radius instead of producing NaN", () => {
+    for (const bad of [0, -10, Number.NaN, Number.POSITIVE_INFINITY]) {
+      const mark = centreMark(bad);
+      expect(Number.isFinite(mark)).toBe(true);
+      expect(mark).toBeGreaterThan(0);
     }
-  });
-
-  it("leaves the pixel itself visible in the gap", () => {
-    const { lines, ring } = reticle(100, 100, R);
-    // no segment passes through the centre point
-    for (const line of lines) {
-      const crosses =
-        Math.min(line.x1, line.x2) <= 100 &&
-        100 <= Math.max(line.x1, line.x2) &&
-        Math.min(line.y1, line.y2) <= 100 &&
-        100 <= Math.max(line.y1, line.y2);
-      expect(crosses).toBe(false);
-    }
-    // and the ring around it is small enough not to hide it
-    expect(ring).toBeGreaterThan(1.5);
-    expect(ring).toBeLessThan(7);
-  });
-
-  it("scales with the loupe instead of being a fixed tiny mark", () => {
-    const small = reticle(0, 0, 40);
-    const large = reticle(0, 0, 90);
-    const reach = (r: ReturnType<typeof reticle>) => Math.max(...r.lines.map((l) => Math.abs(l.x2)));
-    expect(reach(large)).toBeGreaterThan(reach(small));
   });
 });
-
 
 describe("coverPoint", () => {
   // a landscape 1280x960 frame filling a tall 390x620 stage with object-fit: cover
