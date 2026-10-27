@@ -149,6 +149,16 @@ describe("dragging a page", () => {
     expect(card).not.toMatch(/transition:.*opacity/);
   });
 
+  it("flies the held card into its slot when you let go", () => {
+    // The drop used to be a cut: one frame of a floating page, the next frame
+    // nothing. The preview now travels the rest of the way and the real card
+    // takes over when it arrives.
+    expect(view).toMatch(/function flyHome\(/);
+    expect(view).toMatch(/class="drag-ghost"\s*\n?\s*:class="\{ landing \}"/);
+    expect(css).toMatch(/\.drag-ghost\.landing \{[^}]*transition:/);
+    expect(css).toMatch(/\.drag-ghost\.landing \{[^}]*transform 0\.22s/);
+  });
+
   it("leaves a gap where the page will land instead of a marker line", () => {
     expect(css).toMatch(/\.page-card\.dragging \{[^}]*opacity: 0/);
     expect(css).toMatch(/\.page-card\.dragging::after \{[^}]*dashed/);

@@ -99,7 +99,9 @@ camera frame — desk, shadow, skew. After is what the export produces with
   for six seconds. The drag listens on `window`, not on the card: moving a DOM
   node releases its pointer capture, so a handler on the grip died the moment the
   grid rearranged under it — which is exactly what "it hangs and cannot be
-  dragged any more" was.
+  dragged any more" was. Letting go is a small flight, not a cut: the preview
+  travels the last stretch into its slot (220 ms), the ring and the lift fade out
+  on the way, and the real card takes over at the moment it arrives.
 - **Tap to focus.** A tap always answers — ring where the finger was, plus a
   haptic — and asks the lens to focus there; where a browser cannot honour the
   point it falls back to a plain refocus, and if the lens cannot be asked at all

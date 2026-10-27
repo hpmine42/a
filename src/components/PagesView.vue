@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { prefersReducedMotion } from "../lib/anim";
 import Icon from "./Icon.vue";
 import { tap, thump } from "../lib/haptics";
 import {
@@ -121,6 +122,7 @@ onBeforeUnmount(() => {
   // leaving mid-drag must not leave the auto-scroll loop (or the preview) alive
   if (scrollRaf) cancelAnimationFrame(scrollRaf);
   scrollRaf = 0;
+  window.clearTimeout(landTimer);
   listen(false);
   drag = null;
   ghost.value = null;
@@ -277,6 +279,11 @@ const ghost = ref<{
   h: number;
   thumb: string;
 } | null>(null);
+/** The preview is on its way into the slot: the hand-over waits for it. */
+const landing = ref(false);
+/** How long the preview takes to settle into its slot. */
+const LAND_MS = 220;
+let landTimer = 0;
 /** The position the page is in *right now* — the badge follows the reorder. */
 const dragNum = computed(() => scan.pages.findIndex((p) => p.id === draggingId.value) + 1);
 /** Spoken, not shown: where a keyboard move just put the page. */
@@ -451,6 +458,8 @@ function listen(on: boolean): void {
 
 function onGripDown(event: PointerEvent, id: number) {
   if (busy.value) return;
+  // picking a page up while the last one is still landing: land it now
+  if (landing.value) finishLanding();
   const card = (event.currentTarget as HTMLElement).closest<HTMLElement>(".page-card");
   const rect = card?.getBoundingClientRect();
   tap();
@@ -494,21 +503,68 @@ function onDragMove(event: PointerEvent) {
   if (event.cancelable) event.preventDefault();
 }
 
+/**
+ * Let the preview fly the last stretch into its slot.
+ *
+ * Without this the card simply blinked from "held by the finger" to "in the
+ * grid": one frame of a floating page, the next frame nothing. Now the preview
+ * travels the remaining distance, and the real card takes over only once it
+ * arrives — so letting go reads as the page settling into place.
+ */
+function flyHome(id: number): void {
+  const from = ghost.value;
+  const card = cardEls().find((el) => el.dataset.page === String(id));
+  const rect = card?.getBoundingClientRect();
+  if (!from || !rect || !rect.width) {
+    finishLanding();
+    return;
+  }
+  // Both styles change in the same frame only after the transition is in place:
+  // one frame to arm it, the next to move. Otherwise a browser is free to treat
+  // the whole thing as a single jump.
+  landing.value = true;
+  // A frame that never comes (a backgrounded tab) must not leave a floating
+  // card hanging over the grid: the hand-over happens on a clock as well.
+  window.clearTimeout(landTimer);
+  landTimer = window.setTimeout(finishLanding, LAND_MS + 400);
+  requestAnimationFrame(() => {
+    if (!landing.value) return;
+    ghost.value = { x: rect.left, y: rect.top, w: rect.width, h: rect.height, thumb: from.thumb };
+    window.clearTimeout(landTimer);
+    landTimer = window.setTimeout(finishLanding, LAND_MS + 60);
+  });
+}
+
+/** The preview has arrived: the card itself takes over, pixel for pixel. */
+function finishLanding(): void {
+  window.clearTimeout(landTimer);
+  landing.value = false;
+  ghost.value = null;
+  draggingId.value = null;
+}
+
 /** Pointer up, cancel, or the window losing focus: all three end the drag. */
 function onDragEnd() {
   if (!drag) return;
-  const lifted = drag.lifted;
+  const current = drag;
   drag = null;
-  ghost.value = null;
-  draggingId.value = null;
   listen(false);
   if (scrollRaf) {
     cancelAnimationFrame(scrollRaf);
     scrollRaf = 0;
   }
-  if (!lifted) return;
-  // The order is already what the finger chose; there is nothing to apply here.
+  if (!current.lifted) {
+    // a tap on the grip: nothing was lifted, so there is nothing to land
+    ghost.value = null;
+    draggingId.value = null;
+    return;
+  }
   thump();
+  if (prefersReducedMotion()) {
+    finishLanding();
+    return;
+  }
+  flyHome(current.id);
 }
 </script>
 
@@ -541,6 +597,7 @@ function onDragEnd() {
         v-for="(page, i) in scan.pages"
         :key="page.id"
         class="page-card"
+        :data-page="page.id"
         :class="{ dragging: draggingId === page.id }"
       >
         <button class="page-thumb" :aria-label="`Edit page ${i + 1}`" @click="emit('edit', page.id)">
@@ -575,6 +632,7 @@ function onDragEnd() {
       <div
         v-if="ghost"
         class="drag-ghost"
+        :class="{ landing }"
         aria-hidden="true"
         :style="{
           width: `${ghost.w}px`,
