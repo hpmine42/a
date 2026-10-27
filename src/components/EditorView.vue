@@ -3,10 +3,11 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import CornerEditor from "./CornerEditor.vue";
 import Icon from "./Icon.vue";
 import type { Quad } from "../lib/cv";
-import { glideQuad, sleep, SWEEP_MS } from "../lib/anim";
+import { glideQuad, SWEEP_MS } from "../lib/anim";
 import { click, tap } from "../lib/haptics";
 import { canvasFor, containFit } from "../lib/image";
-import { insetQuad, outputSize } from "../lib/cv";
+import { insetQuad, outputSize, type Quad as CropQuad } from "../lib/cv";
+import { detectPageQuadsAsync } from "../lib/detect-async";
 import {
   activePage,
   autoDetect,
@@ -322,14 +323,25 @@ async function runAuto() {
   tap();
   searching.value = true;
   const started = performance.now();
-  const found = autoDetect(current);
-  // The band gets its full pass even when the answer is already in: a sweep that
-  // stops at 60% is the thing that looked like a half-finished scan.
-  await sleep(Math.max(0, SWEEP_MS - (performance.now() - started)));
+
+  // The detector runs in a worker: on the main thread it would freeze the very
+  // sweep that is supposed to explain the wait, and leave the band stuck in the
+  // middle of the sheet.
+  const offThread = detectPageQuadsAsync(current.src, { limit: 1, effort: "thorough" });
+  const detected = await offThread.catch(() => null);
+
+  // The band always gets its full pass, whatever the detector answered
+  const elapsed = performance.now() - started;
+  if (elapsed < SWEEP_MS) await new Promise<void>((r) => window.setTimeout(r, SWEEP_MS - elapsed));
   searching.value = false;
 
+  const found: CropQuad | null = detected === null
+    ? // no worker here: do it inline (the sweep has already finished)
+      (autoDetect(current) ? (current.quad as CropQuad) : null)
+    : detected[0] ?? null;
+
   if (found) {
-    const target = current.quad.map((p) => ({ ...p })) as Quad;
+    const target = found.map((p) => ({ ...p })) as Quad;
     current.quad = before;
     await glideQuad(before, target, 260, (quad) => {
       current.quad = quad as Quad;

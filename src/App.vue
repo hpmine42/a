@@ -4,8 +4,9 @@ import CameraView from "./components/CameraView.vue";
 import CaptureReview from "./components/CaptureReview.vue";
 import EditorView from "./components/EditorView.vue";
 import PagesView from "./components/PagesView.vue";
-import { sleep, SWEEP_MS } from "./lib/anim";
+import { SWEEP_MS } from "./lib/anim";
 import { detectPageQuads, fullFrameQuad, type Quad } from "./lib/cv";
+import { detectPageQuadsAsync } from "./lib/detect-async";
 import { tap, thump } from "./lib/haptics";
 import { preloadPdfWhenIdle } from "./lib/pdf";
 import { makeThumb, nextFrame } from "./lib/image";
@@ -123,6 +124,44 @@ async function applyDetected(img: ImageData, quad: Quad) {
  * itself*: the sheet waits, with "Use this crop" and "Crop it myself". A
  * detection is a suggestion, not a decision.
  */
+/**
+ * The amber band's one pass, as a promise the review sheet resolves.
+ *
+ * Timing the reveal with a `sleep` drifts: the component's own clock starts a
+ * frame later, the browser may throttle, and the band gets cut a few pixels
+ * short of the bottom — which is exactly what "it does not run all the way
+ * through" looks like. The sheet now says when the band has left the photo.
+ */
+let sweepResolve: (() => void) | null = null;
+let sweepDone: Promise<void> = Promise.resolve();
+
+function startSweep(): Promise<void> {
+  let resolve!: () => void;
+  sweepDone = new Promise<void>((r) => (resolve = r));
+  sweepResolve = resolve;
+  // safety net: a sheet that never reports must not hang the flow
+  window.setTimeout(() => resolveSweep(), SWEEP_MS * 4);
+  return sweepDone;
+}
+
+function resolveSweep() {
+  sweepResolve?.();
+  sweepResolve = null;
+}
+
+/**
+ * Let the detector have a go on the captured photo.
+ *
+ * The photo stays on the review sheet while it works, and the amber band makes
+ * one full pass from above the photo to below it — never a loop that stops
+ * wherever the detector finished. The detector itself runs in a worker so the
+ * band keeps moving while it thinks; only a browser without workers falls back
+ * to blocking, and there the pass still completes first.
+ *
+ * When the band is done and there is an answer, the outline draws itself in and
+ * *nothing happens by itself*: the sheet waits, with "Use this crop" and "Crop
+ * it myself". A detection is a suggestion, not a decision.
+ */
 async function chooseAuto() {
   const img = pending.value;
   if (!img || reviewBusy.value) return;
@@ -132,17 +171,19 @@ async function chooseAuto() {
 
   reviewBusy.value = true;
   busy = true;
-  const started = performance.now();
   try {
     reviewPhase.value = "searching";
     reviewFound.value = null;
     reviewSecond.value = null;
+    const swept = startSweep();
 
-    const quads = safeDetectMany(img);
-    // Let the band finish its pass even when the answer arrived early: an
-    // animation that stops at 80% is exactly the "halber Scan" this fixes.
-    const elapsed = performance.now() - started;
-    if (elapsed < SWEEP_MS) await sleep(SWEEP_MS - elapsed);
+    // Off the main thread, so the band is not paused by the detector
+    const offThread = detectPageQuadsAsync(img, { limit: 2, effort: "thorough" });
+    const [detected] = await Promise.all([offThread, swept]);
+    if (abandoned()) return;
+
+    // null means "no worker here": do it inline, after the pass has finished
+    const quads = detected ?? safeDetectMany(img);
     if (abandoned()) return;
 
     if (quads.length > 1) {
@@ -152,9 +193,8 @@ async function chooseAuto() {
       return;
     }
 
-    const quad = quads[0] ?? null;
-    if (quad) {
-      reviewFound.value = quad;
+    if (quads.length === 1) {
+      reviewFound.value = quads[0];
       reviewPhase.value = "found";
     } else {
       // Nothing found is still an answer: say so, and leave the three ways out
@@ -280,6 +320,7 @@ function safeDetect(img: ImageData): Quad | null {
 function chooseManual() {
   const img = pending.value;
   if (!img) return;
+  resolveSweep();
   reviewToken++;
   pending.value = null;
   tap();
@@ -298,6 +339,7 @@ function chooseManual() {
 function chooseWhole() {
   const img = pending.value;
   if (!img) return;
+  resolveSweep();
   reviewToken++;
   pending.value = null;
   tap();
@@ -311,6 +353,8 @@ function chooseWhole() {
 }
 
 function retake() {
+  // leaving the sheet must not leave a waiting sweep behind
+  resolveSweep();
   reviewToken++;
   pending.value = null;
   reviewPhase.value = "idle";
@@ -428,6 +472,7 @@ onBeforeUnmount(() => {
         @single="chooseFirst"
         @confirm="confirmFound"
         @adjust="adjustFound"
+        @swept="resolveSweep"
       />
 
       <EditorView

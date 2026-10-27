@@ -36,6 +36,8 @@ const emit = defineEmits<{
   (e: "confirm"): void;
   /** "Crop it myself": the search found a page, the user wants the corners. */
   (e: "adjust"): void;
+  /** The amber band has run from the top of the photo to the bottom. */
+  (e: "swept"): void;
 }>();
 
 const canvas = ref<HTMLCanvasElement | null>(null);
@@ -44,6 +46,8 @@ let observer: ResizeObserver | null = null;
 let raf = 0;
 /** Clock for the current animation: the sweep cycles, the reveal runs once. */
 let phaseStart = 0;
+/** The sweep animation has finished for the current search. */
+let sweepAnnounced = false;
 
 const title = computed(() => {
   if (props.phase === "searching") return "Looking for the page…";
@@ -114,8 +118,17 @@ function draw() {
      * only covered half the photo. The band now always travels the whole page
      * once, and detection waits for it (see SWEEP_MS).
      */
-    const sweep = Math.min(1, (performance.now() - phaseStart) / SWEEP_MS);
-    const y = dy + dh * (0.03 + sweep * 0.94);
+    /*
+     * The band starts above the photo and ends below it.
+     *
+     * It used to travel only 3%…97% and then fade, which on a short landscape
+     * photo reads as "it stopped before the bottom edge". Now it enters and
+     * exits: the clip on the photo crops it, so the pass is visibly complete.
+     */
+    const sweep = prefersReducedMotion()
+      ? 1
+      : Math.min(1, (performance.now() - phaseStart) / SWEEP_MS);
+    const y = dy + dh * (-0.08 + sweep * 1.16);
     // the band belongs to the photo, not to the sheet around it
     ctx.save();
     ctx.beginPath();
@@ -125,8 +138,6 @@ function draw() {
     band.addColorStop(0, "rgba(255, 192, 97, 0)");
     band.addColorStop(0.5, "rgba(255, 192, 97, 0.3)");
     band.addColorStop(1, "rgba(255, 192, 97, 0)");
-    // the band eases out as it leaves the page, so it does not just vanish
-    ctx.globalAlpha = sweep > 0.9 ? Math.max(0, 1 - (sweep - 0.9) / 0.1) : 1;
     ctx.fillStyle = band;
     ctx.fillRect(dx, y - 60, dw, 120);
     ctx.beginPath();
@@ -135,7 +146,6 @@ function draw() {
     ctx.lineWidth = 2;
     ctx.strokeStyle = "rgba(255, 214, 152, 0.95)";
     ctx.stroke();
-    ctx.globalAlpha = 1;
     ctx.restore();
     ctx.strokeStyle = "rgba(255, 255, 255, 0.16)";
     ctx.lineWidth = 1;
@@ -212,9 +222,13 @@ function frame() {
   raf = 0;
   draw();
   if (props.phase === "searching") {
-    // stop at the end of the pass instead of looping under the reveal
-    const done = performance.now() - phaseStart >= SWEEP_MS;
-    if (!done || prefersReducedMotion()) return;
+    // run until the band has left the photo, then stop — the detector no longer
+    // decides how far the pass gets
+    const done = prefersReducedMotion() || performance.now() - phaseStart >= SWEEP_MS;
+    if (done) {
+      announceSweep();
+      return;
+    }
     raf = requestAnimationFrame(frame);
     return;
   }
@@ -231,10 +245,19 @@ function kick() {
   raf = requestAnimationFrame(frame);
 }
 
+/** One "the band has left the photo" per search, so the reveal is timed by the
+ *  animation itself and not by a sleep that can drift. */
+function announceSweep() {
+  if (sweepAnnounced) return;
+  sweepAnnounced = true;
+  emit("swept");
+}
+
 watch(
   () => props.phase,
-  () => {
+  (phase) => {
     phaseStart = performance.now();
+    sweepAnnounced = phase !== "searching";
     kick();
   }
 );
@@ -245,6 +268,14 @@ onMounted(() => {
   observer = new ResizeObserver(draw);
   if (host.value) observer.observe(host.value);
   draw();
+  // The sheet can be mounted straight into a search (a second photo while the
+  // first one is still going): the pass has to start here too, not only when the
+  // phase *changes*.
+  if (props.phase === "searching") {
+    phaseStart = performance.now();
+    sweepAnnounced = false;
+    kick();
+  }
 });
 
 onBeforeUnmount(() => {

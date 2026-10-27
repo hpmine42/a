@@ -209,17 +209,29 @@ export function installDomStubs() {
   g.ResizeObserver = RO;
 
   /**
-   * Worker stub: when `__workerQuad` is set, it answers every detection request
-   * with that quad, so the "outline visible → use it" path can be exercised.
+   * Worker stub.
+   *
+   * The viewfinder asks for one quad and reads `__workerQuad`; the capture path
+   * asks with a `limit` and gets `__workerQuads` back (empty when the scene has
+   * no page, which is the "nothing found" case tests rely on).
    */
   class FakeWorker {
     onmessage: ((e: MessageEvent) => void) | null = null;
-    postMessage(msg: { id: number }) {
-      const quad = (globalThis as unknown as { __workerQuad?: unknown }).__workerQuad;
-      if (!quad) return;
-      window.setTimeout(() => {
-        this.onmessage?.({ data: { id: msg.id, quad } } as MessageEvent);
-      }, 0);
+    postMessage(msg: { id: number; limit?: number }) {
+      const globals = globalThis as unknown as {
+        __workerQuad?: unknown;
+        __workerQuads?: unknown;
+      };
+      const reply = (data: unknown) =>
+        window.setTimeout(() => this.onmessage?.({ data } as MessageEvent), 0);
+
+      if (msg.limit !== undefined) {
+        const quads = (globals.__workerQuads as unknown[] | undefined) ?? [];
+        reply({ id: msg.id, quad: quads[0] ?? null, quads });
+        return;
+      }
+      if (!globals.__workerQuad) return;
+      reply({ id: msg.id, quad: globals.__workerQuad });
     }
     terminate() {
       this.onmessage = null;
