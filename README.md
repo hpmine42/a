@@ -142,6 +142,24 @@ Some phones browse in "desktop site" mode, which reports a ~980px viewport on a
 measures that mismatch and sets `--u`, so the UI comes out the right size anyway.
 `?u=2.4` forces a scale by hand if a browser is being creative.
 
+Two things about that measurement are worth knowing, because both were a bug on a
+real phone:
+
+- **A launch is not a measurement.** A PWA cold start can report the desktop
+  layout width for the first frames, before the viewport meta is honoured. One
+  sample taken then was a 2.4× UI for the rest of the session — "sometimes it
+  opens bigger and you have to scroll" — because nothing fires a `resize` to
+  correct it. The decision now needs corroboration (the visual viewport says the
+  page really is painted small, or the visible width agrees with the layout
+  width), and the reading is repeated after the app is up and whenever it comes
+  back to the foreground, so a wrong boost takes itself back.
+- **`100dvh` is not the visible height in a standalone app.** With the status bar
+  over the page and the gesture bar below it, the layout can be a few dozen
+  pixels taller than the screen: the document scrolls by that sliver and the top
+  bar arrives with its chips cut off. The shell is sized from
+  `visualViewport.height` (`--app-h`), capped at the viewport, and the document
+  itself never scrolls — the lists inside do.
+
 ## How the pictures get good
 
 A phone photo of a page is paper multiplied by the light falling on it, and that

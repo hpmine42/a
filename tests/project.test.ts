@@ -108,7 +108,8 @@ describe("the editor top bar", () => {
     expect(block(".editor-actions")).toMatch(/min-width: 0/);
     // and the row itself got tighter rather than wider
     expect(block(".editor-top")).toMatch(/gap: calc\(8px/);
-    expect(block(".editor-top")).toMatch(/padding: calc\(12px \* var\(--u\)\) calc\(12px/);
+    // (the top inset is the safe area, see "the shell fits the screen it is on")
+    expect(block(".editor-top")).toMatch(/calc\(12px \* var\(--u\)\) calc\(10px \* var\(--u\)\)/);
   });
 });
 
@@ -134,6 +135,35 @@ describe("dragging a page", () => {
     expect(css).toMatch(/\.drag-ghost \{[^}]*position: fixed/);
     // the old "drop here" marker is gone with the old behaviour
     expect(css).not.toMatch(/\.drop-before/);
+  });
+});
+
+describe("the shell fits the screen it is on", () => {
+  const css = read("src/styles.css");
+  const block = (selector: string) => {
+    const start = css.indexOf(`${selector} {`);
+    expect(start, `${selector} must exist`).toBeGreaterThan(-1);
+    return css.slice(start, css.indexOf("}", start));
+  };
+
+  it("sizes the app from the visible area, not from 100dvh", () => {
+    // a standalone PWA counts the status bar and the gesture bar, so 100dvh can
+    // be taller than the screen: the app then scrolls by that sliver and the top
+    // bar is cut off ("sometimes it opens bigger and you have to scroll")
+    expect(block(".app")).toMatch(/height: var\(--app-h, 100dvh\)/);
+    expect(block(".app")).toMatch(/max-height: 100%/);
+  });
+
+  it("does not let the document scroll at all", () => {
+    const start = css.indexOf("html,\nbody {");
+    expect(start).toBeGreaterThan(-1);
+    const rule = css.slice(start, css.indexOf("}", start));
+    expect(rule).toMatch(/overflow: hidden/);
+    expect(rule).toMatch(/overscroll-behavior: none/);
+  });
+
+  it("keeps the desktop frame centred instead of letting it grow", () => {
+    expect(css).toMatch(/max-height: 94dvh/);
   });
 });
 
