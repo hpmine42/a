@@ -1,7 +1,7 @@
 import type { jsPDF as JsPdf } from "jspdf";
 import { enhance, insetQuad, outputSize, warp } from "./cv";
-import { imageDataToCanvas, nextFrame, slug } from "./image";
-import { EDGE_INSET, EXPORT_MAX, naturalSide, type Page } from "./store";
+import { imageDataToCanvas, nextFrame, rotateImageData, slug } from "./image";
+import { EDGE_INSET, EXPORT_MAX, ensureSource, naturalSide, type Page } from "./store";
 
 export type PageFormat = "a4" | "letter" | "fit";
 
@@ -70,14 +70,42 @@ export function pdfFilename(input: string, pages: number): string {
   return `${base}.pdf`;
 }
 
-/** Build the PDF and return the file name it was saved as. */
-export async function exportPdf(
+/**
+ * The biggest canvas this is allowed to ask for.
+ *
+ * iOS Safari silently returns a blank canvas past roughly 16.7M pixels and has
+ * historically refused anything over 4096 on one side; Android is not
+ * unlimited either. A6 at 300 DPI is ~8.7M, so the cap sits just under the line
+ * and a page that would cross it is rendered a little smaller rather than
+ * coming out empty.
+ */
+export const MAX_CANVAS_PX = 8_000_000;
+export const MAX_CANVAS_DIM = 4096;
+
+/** Shrink a render size until every browser will actually draw it. */
+export function safeCanvasSize(w: number, h: number): { w: number; h: number } {
+  let scale = 1;
+  if (w * h > MAX_CANVAS_PX) scale = Math.sqrt(MAX_CANVAS_PX / (w * h));
+  const long = Math.max(w, h) * scale;
+  if (long > MAX_CANVAS_DIM) scale *= MAX_CANVAS_DIM / long;
+  if (scale >= 1) return { w, h };
+  return { w: Math.max(1, Math.round(w * scale)), h: Math.max(1, Math.round(h * scale)) };
+}
+
+export type BuiltPdf = { blob: Blob; filename: string };
+
+/**
+ * Build the PDF in memory. Separate from saving it, because a phone has two
+ * very different ways of getting rid of it: a download, or the share sheet
+ * (which is what people actually use — straight to mail, chat or Drive).
+ */
+export async function buildPdf(
   pages: Page[],
   format: PageFormat = "a4",
   onProgress?: Progress,
   /** Base name for the file, without `.pdf`. */
   name = ""
-): Promise<string> {
+): Promise<BuiltPdf> {
   // jsPDF and its dependencies are ~370 kB that nobody needs until the moment a
   // PDF is saved, so the whole library is loaded on demand.
   const { jsPDF } = await import("jspdf");
@@ -87,16 +115,20 @@ export async function exportPdf(
     const page = pages[i];
     onProgress?.(i, pages.length);
     await nextFrame();
+    // a page restored from the last session may still be decoding
+    await ensureSource(page);
 
     const quad = insetQuad(page.quad, EDGE_INSET);
     // never scale a page above what the photo has: invented pixels cost file
     // size and buy nothing a reader can see
-    const size = outputSize(quad, Math.min(EXPORT_MAX, naturalSide(page)));
+    const natural = outputSize(quad, Math.min(EXPORT_MAX, naturalSide(page)));
+    const size = safeCanvasSize(natural.w, natural.h);
     const warped = warp(page.src, quad, size.w, size.h);
+    const upright = rotateImageData(warped, page.rotation / 90);
     // Optimize off means untouched: the straight photo, nothing applied
     const result = page.opts.optimize
-      ? enhance(warped, { mode: "bw", brightness: 0, contrast: 0, strength: 58 })
-      : warped;
+      ? enhance(upright, { mode: "bw", brightness: 0, contrast: 0, strength: 58 })
+      : upright;
     // An optimised page is black text on paper: it survives 0.9 untouched and
     // saves a third of the file. A photo keeps 0.95 — that is where it shows.
     const quality = page.opts.optimize ? 0.9 : 0.95;
@@ -129,6 +161,30 @@ export async function exportPdf(
   const filename =
     name.trim() || (pages.length === 1 ? slug(pages[0].name) : "");
   const safe = pdfFilename(filename, pages.length);
-  doc?.save(safe);
-  return safe;
+  return { blob: doc ? doc.output("blob") : new Blob(), filename: safe };
+}
+
+/** Build and hand the file to the browser's download machinery. */
+export async function exportPdf(
+  pages: Page[],
+  format: PageFormat = "a4",
+  onProgress?: Progress,
+  name = ""
+): Promise<string> {
+  const { blob, filename } = await buildPdf(pages, format, onProgress, name);
+  downloadBlob(blob, filename);
+  return filename;
+}
+
+export function downloadBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.rel = "noopener";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  // Safari needs a beat before the object URL goes away
+  window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
 }

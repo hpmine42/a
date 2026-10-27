@@ -562,7 +562,18 @@ function edgeCandidates(
  * Every candidate is scored on fill, contrast (paper brighter than the desk),
  * edge sharpness and size; only the winner is then snapped precisely.
  */
+/**
+ * The single best sheet in a photo.
+ *
+ * Kept as its own name because almost every caller wants exactly one page; the
+ * plural version exists for the book-open or two-receipts case, where splitting
+ * is the difference between one scan and a wasted trip.
+ */
 export function detectPageQuad(img: ImageData, options: DetectOptions = {}): Quad | null {
+  return detectPageQuads(img, options, 1)[0] ?? null;
+}
+
+function detectPageMain(img: ImageData, options: DetectOptions = {}): Quad | null {
   const thorough = (options.effort ?? "thorough") === "thorough";
   const planes = downscalePlanes(img, thorough ? 480 : 360);
   const { w, h } = planes;
@@ -705,6 +716,132 @@ export function detectPageQuad(img: ImageData, options: DetectOptions = {}): Qua
   const inv = img.width / w;
   return orderQuad(trimmed.map((p) => ({ x: p.x * inv, y: p.y * inv })) as Quad);
 }
+
+/**
+ * Up to `limit` sheets, best first.
+ *
+ * The second page is not a second-best guess: it has to be a *different*
+ * rectangle (almost no overlap with the winner), it has to be plausible on its
+ * own, and it has to score at least half as well. Two sheets side by side in a
+ * photo are a real thing (an open book, two receipts); a corner of the same
+ * sheet re-detected at another threshold is not.
+ */
+export function detectPageQuads(
+  img: ImageData,
+  options: DetectOptions = {},
+  limit = 2
+): Quad[] {
+  const first = detectPageMain(img, options);
+  if (!first || limit < 2) return first ? [first] : [];
+
+  // Paint the found sheet out and look again: whatever is left is a separate
+  // object, which is much more honest than ranking blobs of one page. The copy
+  // is small on purpose — a full-resolution duplicate of a 12MP photo is 40 MB
+  // of memory for a search that runs at 480px anyway.
+  const small = downscaleRgba(img, 900);
+  const k = small.width / img.width;
+  blankOutside(small, rescaleQuad(first, k));
+  const found = detectPageMain(small, options);
+  if (!found) return [first];
+  const second = rescaleQuad(found, 1 / k);
+  if (quadIoU(first, second) > 0.12) return [first];
+  if (!plausibleQuad(first, second)) return [first];
+  return [first, second];
+}
+
+/** Map a quad between two resolutions. */
+function rescaleQuad(quad: Quad, k: number): Quad {
+  return quad.map((p) => ({ x: p.x * k, y: p.y * k })) as Quad;
+}
+
+/** Box-downscale RGBA. Only used to search the second sheet. */
+function downscaleRgba(img: ImageData, maxSide: number): ImageData {
+  const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+  const w = Math.max(8, Math.round(img.width * scale));
+  const h = Math.max(8, Math.round(img.height * scale));
+  if (w === img.width && h === img.height) return new ImageData(new Uint8ClampedArray(img.data), w, h);
+  const out = new ImageData(w, h);
+  const dx = img.width / w;
+  const dy = img.height / h;
+  const src = img.data;
+  const dst = out.data;
+  for (let y = 0; y < h; y++) {
+    const y0 = Math.floor(y * dy);
+    const y1 = Math.min(img.height, Math.max(y0 + 1, Math.floor((y + 1) * dy)));
+    for (let x = 0; x < w; x++) {
+      const x0 = Math.floor(x * dx);
+      const x1 = Math.min(img.width, Math.max(x0 + 1, Math.floor((x + 1) * dx)));
+      let r = 0;
+      let g = 0;
+      let b = 0;
+      let n = 0;
+      for (let yy = y0; yy < y1; yy++) {
+        const row = yy * img.width;
+        for (let xx = x0; xx < x1; xx++) {
+          const i = (row + xx) * 4;
+          r += src[i];
+          g += src[i + 1];
+          b += src[i + 2];
+          n++;
+        }
+      }
+      const o = (y * w + x) * 4;
+      dst[o] = r / n;
+      dst[o + 1] = g / n;
+      dst[o + 2] = b / n;
+      dst[o + 3] = 255;
+    }
+  }
+  return out;
+}
+
+/** The first sheet's corners, mapped back — the mask is the same size. */
+function blankOutside(img: ImageData, quad: Quad): void {
+  const xs = quad.map((p) => p.x);
+  const ys = quad.map((p) => p.y);
+  const x0 = Math.max(0, Math.floor(Math.min(...xs)));
+  const y0 = Math.max(0, Math.floor(Math.min(...ys)));
+  const x1 = Math.min(img.width, Math.ceil(Math.max(...xs)));
+  const y1 = Math.min(img.height, Math.ceil(Math.max(...ys)));
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x1; x++) {
+      if (!insideQuad({ x, y }, quad)) continue;
+      const i = (y * img.width + x) * 4;
+      // desk-coloured, so the paper mask cannot see it as a sheet
+      img.data[i] = 90;
+      img.data[i + 1] = 88;
+      img.data[i + 2] = 84;
+    }
+  }
+}
+
+function insideQuad(p: { x: number; y: number }, quad: Quad): boolean {
+  let inside = false;
+  for (let i = 0, j = 3; i < 4; j = i++) {
+    const a = quad[i];
+    const b = quad[j];
+    if (a.y > p.y !== b.y > p.y && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+/** Both rectangles have to be sheet-shaped, not a sliver or a triangle. */
+function plausibleQuad(a: Quad, b: Quad): boolean {
+  const area = (q: Quad) => quadArea(q);
+  const sa = area(a);
+  const sb = area(b);
+  if (sb < sa * 0.18 || sb > sa * 1.35) return false;
+  const sides = (q: Quad) =>
+    q.map((p, i) => Math.hypot(q[(i + 1) % 4].x - p.x, q[(i + 1) % 4].y - p.y));
+  const s = sides(b);
+  const longest = Math.max(...s);
+  const shortest = Math.min(...s);
+  return shortest > longest * 0.25;
+}
+
+
 
 type Planes = { r: Float32Array; g: Float32Array; b: Float32Array; w: number; h: number };
 

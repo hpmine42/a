@@ -9,7 +9,14 @@ import {
   type Mode,
   type Quad,
 } from "./cv";
-import { makeThumb, nextFrame } from "./image";
+import {
+  bitmapToImageData,
+  imageDataToCanvas,
+  makeThumb,
+  nextFrame,
+  rotateImageData,
+} from "./image";
+import { projectStore, type StoredMeta, type StoredPage } from "./storage";
 
 /**
  * What a page looks like. One decision, not a control panel: Optimize is either
@@ -23,6 +30,16 @@ export type Page = {
   id: number;
   name: string;
   src: ImageData;
+  /** The photo as a file, so a reload can put the page back on screen. */
+  srcBlob: Blob | null;
+  /**
+   * Set while a restored page is still being decoded. `src` holds a 1x1
+   * placeholder until `ensureSource` resolves — the grid only needs the thumb,
+   * and decoding ten 3600px photos at launch is a second of blank screen.
+   */
+  pending: Promise<ImageData> | null;
+  /** Quarter turns applied at render time. */
+  rotation: number;
   quad: Quad;
   warped: ImageData | null;
   /** Resolution `warped` was rendered at — a preview must not be mistaken for
@@ -87,6 +104,9 @@ export function addPage(src: ImageData, name = "scan"): Page {
     id: nextId++,
     name,
     src: markRaw(src),
+    srcBlob: null,
+    pending: null,
+    rotation: 0,
     quad: fullFrameQuad(src.width, src.height),
     warped: null,
     warpedSide: 0,
@@ -145,7 +165,9 @@ export type ProcessOptions = {
 export async function processPage(page: Page, opts: ProcessOptions = {}): Promise<void> {
   const { full = false, rewriteWarp = false, force = false } = opts;
   const maxSide = opts.maxSide ?? (full ? PREVIEW_MAX : 900);
-  const key = `${maxSide}:${page.opts.optimize ? "opt" : "orig"}`;
+  const key = `${maxSide}:${page.opts.optimize ? "opt" : "orig"}:${page.rotation}`;
+
+  await ensureSource(page);
 
   if (!force && page.result && page.warped && page.warpedSide === maxSide && page.cacheKey === key) {
     if (full && !page.thumb) page.thumb = makeThumb(page.result);
@@ -161,9 +183,10 @@ export async function processPage(page: Page, opts: ProcessOptions = {}): Promis
     page.warpedSide = maxSide;
   }
 
+  const upright = rotateImageData(page.warped, page.rotation / 90);
   page.result = page.opts.optimize
-    ? markRaw(enhance(page.warped, { mode: "bw", brightness: 0, contrast: 0, strength: 58 }))
-    : page.warped;
+    ? markRaw(enhance(upright, { mode: "bw", brightness: 0, contrast: 0, strength: 58 }))
+    : upright;
   page.cacheKey = key;
   if (full) page.thumb = makeThumb(page.result);
 }
@@ -173,17 +196,30 @@ export function toggleOptimize(page: Page): void {
   page.opts.optimize = !page.opts.optimize;
 }
 
+/** Turn the page a quarter turn clockwise. */
+export function rotatePage(page: Page): void {
+  page.rotation = (page.rotation + 90) % 360;
+  // The warp is unchanged, so only the look cache has to go.
+  page.result = null;
+  page.cacheKey = "";
+}
+
 /** Put a page back where it came from — the other half of a removal. */
 export function insertPage(page: Page, index: number): void {
   const at = Math.max(0, Math.min(index, scan.pages.length));
   scan.pages.splice(at, 0, page);
   scan.activeId = page.id;
+  // the removal deleted the stored copy: undo has to put it back
+  scheduleSave(page);
+  scheduleSave();
 }
 
 /** Restore a list of pages (undo of "clear all"). */
 export function insertPages(pages: Page[]): void {
   scan.pages.unshift(...pages);
   scan.activeId = scan.pages[0]?.id ?? 0;
+  for (const page of pages) scheduleSave(page);
+  scheduleSave();
 }
 
 export function removePage(id: number): void {
@@ -193,11 +229,208 @@ export function removePage(id: number): void {
   if (scan.activeId === id) {
     scan.activeId = scan.pages[Math.min(index, scan.pages.length - 1)]?.id ?? 0;
   }
+  void projectStore()?.dropPage(id);
+  scheduleSave();
 }
 
 export function clearPages(): void {
   scan.pages.splice(0, scan.pages.length);
   scan.activeId = 0;
+  void projectStore()?.wipe();
+}
+
+/** Move a page to another slot — dragging one card in front of another. */
+export function movePage(from: number, to: number): void {
+  if (from === to) return;
+  const target = Math.max(0, Math.min(scan.pages.length - 1, to));
+  if (from < 0 || from >= scan.pages.length || target === from) return;
+  const [page] = scan.pages.splice(from, 1);
+  scan.pages.splice(target, 0, page);
+  scheduleSave();
+}
+
+/* ------------------------------------------------------------- persistence */
+
+/**
+ * Decoding is the one part of restoring that costs real time, so it happens
+ * when a page is actually opened rather than during launch. Everything that
+ * needs pixels awaits this first.
+ */
+export async function ensureSource(page: Page): Promise<void> {
+  if (!page.pending) return;
+  const pending = page.pending;
+  page.pending = null;
+  try {
+    page.src = markRaw(await pending);
+  } catch {
+    // An unreadable photo is not a crash: the page keeps its thumbnail and
+    // simply cannot be re-cropped.
+    page.pending = null;
+  }
+}
+
+let saveTimer = 0;
+let saving = false;
+const dirty = new Set<number>();
+let metaDirty = false;
+
+/**
+ * Write the project to the device, debounced. Called from the handful of places
+ * that change something a reload should keep: a new page, a finished crop, a
+ * different look, a rotation, a reorder.
+ */
+export function scheduleSave(page?: Page): void {
+  const store = projectStore();
+  if (!store) return;
+  if (page) dirty.add(page.id);
+  else metaDirty = true;
+  window.clearTimeout(saveTimer);
+  saveTimer = window.setTimeout(() => void flushSave(), 500);
+}
+
+function metaSnapshot(): StoredMeta {
+  return {
+    format: scan.format,
+    filename: scan.filename,
+    activeId: scan.activeId,
+    ids: scan.pages.map((p) => p.id),
+  };
+}
+
+async function encodeSource(page: Page): Promise<Blob | null> {
+  if (page.srcBlob) return page.srcBlob;
+  // A restored page keeps the blob it came from. Decoding first matters: writing
+  // `src: null` over a good record would throw the photo away for good.
+  if (page.pending) {
+    await ensureSource(page);
+    if (page.srcBlob) return page.srcBlob;
+  }
+  try {
+    const canvas = imageDataToCanvas(page.src);
+    if (typeof canvas.toBlob !== "function") return null;
+    const blob = await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob((result) => resolve(result), "image/jpeg", 0.92)
+    );
+    page.srcBlob = blob;
+    return blob;
+  } catch {
+    return null;
+  }
+}
+
+/** Flush everything that is waiting; safe to call on pagehide. */
+export async function flushSave(): Promise<void> {
+  const store = projectStore();
+  if (!store || saving) return;
+  window.clearTimeout(saveTimer);
+  saving = true;
+  try {
+    for (const id of [...dirty]) {
+      const page = scan.pages.find((p) => p.id === id);
+      dirty.delete(id);
+      if (!page) continue;
+      const src = await encodeSource(page);
+      const record: StoredPage = {
+        id: page.id,
+        name: page.name,
+        quad: page.quad.map((p) => ({ ...p })) as Quad,
+        rotation: page.rotation,
+        optimize: page.opts.optimize,
+        thumb: page.thumb,
+        src,
+      };
+      await store.writePage(record);
+    }
+    if (metaDirty) {
+      metaDirty = false;
+      await store.writeMeta(metaSnapshot());
+    }
+  } catch {
+    /* a full disk or a private window: the session still works */
+  } finally {
+    saving = false;
+    // a change that arrived mid-write must not be the one that is lost
+    if (dirty.size || metaDirty) window.setTimeout(() => void flushSave(), 120);
+  }
+}
+
+/**
+ * Bring back the last project. Returns how many pages were restored; the caller
+ * decides whether that deserves a word on screen.
+ */
+export async function restoreProject(): Promise<number> {
+  const store = projectStore();
+  if (!store) return 0;
+  let records: StoredPage[] = [];
+  let meta: StoredMeta | null = null;
+  try {
+    records = await store.readPages();
+    meta = await store.readMeta();
+  } catch {
+    return 0;
+  }
+  if (!records.length) return 0;
+
+  const order = meta?.ids ?? [];
+  records.sort((a, b) => {
+    const ia = order.indexOf(a.id);
+    const ib = order.indexOf(b.id);
+    if (ia === -1 && ib === -1) return a.id - b.id;
+    if (ia === -1) return 1;
+    if (ib === -1) return -1;
+    return ia - ib;
+  });
+
+  const restored: Page[] = records.map((record) => {
+      // a decode that fails must not become an unhandled rejection: nothing awaits
+    // it until the page is opened
+    const pending = record.src
+      ? decodeSource(record.src).catch((err) => {
+          console.warn("[scano] could not decode a stored page", err);
+          return new ImageData(1, 1);
+        })
+      : null;
+    const page: Page = {
+      id: record.id,
+      name: record.name || "scan",
+      // 1x1 until the decode lands; nothing draws it before then
+      src: markRaw(new ImageData(1, 1)),
+      srcBlob: record.src,
+      pending,
+      rotation: record.rotation ?? 0,
+      quad: record.quad,
+      warped: null,
+      warpedSide: 0,
+      result: null,
+      cacheKey: "",
+      thumb: record.thumb,
+      opts: { optimize: Boolean(record.optimize) },
+    };
+    return page;
+  });
+
+  // A shot taken in the half-second since launch must not be overwritten: the
+  // stored pages are older, so they go in front.
+  if (scan.pages.length) scan.pages.unshift(...restored);
+  else scan.pages.splice(0, scan.pages.length, ...restored);
+  if (meta) {
+    scan.format = meta.format ?? "a4";
+    scan.filename = meta.filename ?? "";
+    scan.activeId = restored.some((p) => p.id === meta!.activeId) ? meta.activeId : restored[0].id;
+  } else {
+    scan.activeId = restored[0].id;
+  }
+  nextId = Math.max(nextId, ...restored.map((p) => p.id + 1));
+  return restored.length;
+}
+
+async function decodeSource(blob: Blob): Promise<ImageData> {
+  const bitmap = await createImageBitmap(blob, { imageOrientation: "from-image" });
+  try {
+    return bitmapToImageData(bitmap, IMPORT_MAX);
+  } finally {
+    bitmap.close?.();
+  }
 }
 
 export type { Mode, Quad };

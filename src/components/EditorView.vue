@@ -11,10 +11,13 @@ import {
   activePage,
   autoDetect,
   EDGE_INSET,
+  ensureSource,
   naturalSide,
   PREVIEW_MAX,
   processPage,
+  rotatePage,
   scan,
+  scheduleSave,
 } from "../lib/store";
 
 const props = withDefaults(
@@ -182,6 +185,7 @@ async function reprocess(options: { rewriteWarp?: boolean; maxSide?: number; ful
     renderedSide = maxSide;
     await nextTick();
     queueDraw();
+    scheduleSave(current);
   } finally {
     if (mine === generation) hideBusy();
   }
@@ -242,7 +246,10 @@ function refreshQuietly() {
   if (!current || !cropDirty) return;
   cropDirty = false;
   void processPage(current, { full: true, rewriteWarp: true, maxSide: neededSide() })
-    .then(queueDraw)
+    .then(() => {
+      scheduleSave(current);
+      queueDraw();
+    })
     .catch(() => undefined);
 }
 
@@ -256,8 +263,21 @@ async function finish() {
     await processPage(current, { full: true, rewriteWarp: true, maxSide: 900 }).catch(
       () => undefined
     );
+    scheduleSave(current);
   }
   emit("done");
+}
+
+/** A quarter turn, clockwise. Marked only, rendered on the next pass. */
+async function rotate() {
+  const current = page.value;
+  if (!current) return;
+  tap();
+  rotatePage(current);
+  await reprocess({});
+  swapping.value = true;
+  window.clearTimeout(swapTimer);
+  swapTimer = window.setTimeout(() => (swapping.value = false), 220);
 }
 
 function onCommit() {
@@ -341,6 +361,9 @@ async function stageReady(): Promise<void> {
 }
 
 onMounted(async () => {
+  // A restored page arrives as a thumbnail plus a blob; the pixels come back
+  // here, before anything tries to draw them.
+  if (page.value) await ensureSource(page.value);
   observer = new ResizeObserver(() => {
     queueDraw();
     // a real resize (rotation, desktop window) can change how many pixels the
@@ -405,15 +428,20 @@ defineExpose({ openFrame: () => (mode.value = "frame") });
         {{ pageIndex }}<span>/{{ scan.pages.length }}</span>
       </div>
 
-      <button
-        v-if="mode === 'result'"
-        class="control"
-        aria-label="Adjust the corners"
-        @click="toggleFrame"
-      >
-        <Icon name="crop" :size="19" />
-        <span>Crop</span>
-      </button>
+      <div v-if="mode === 'result'" class="editor-actions">
+        <button
+          class="control"
+          aria-label="Rotate this page a quarter turn"
+          @click="rotate"
+        >
+          <Icon name="rotate" :size="19" />
+          <span>Rotate</span>
+        </button>
+        <button class="control" aria-label="Adjust the corners" @click="toggleFrame">
+          <Icon name="crop" :size="19" />
+          <span>Crop</span>
+        </button>
+      </div>
       <!-- in the crop tool the way out is the big button below, not here -->
       <span v-else class="editor-spacer" aria-hidden="true" />
     </header>

@@ -1,14 +1,23 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from "vue";
+import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import CameraView from "./components/CameraView.vue";
 import CaptureReview from "./components/CaptureReview.vue";
 import EditorView from "./components/EditorView.vue";
 import PagesView from "./components/PagesView.vue";
 import { sleep } from "./lib/anim";
-import { detectPageQuad, fullFrameQuad, type Quad } from "./lib/cv";
+import { detectPageQuads, fullFrameQuad, type Quad } from "./lib/cv";
 import { tap, thump } from "./lib/haptics";
 import { makeThumb, nextFrame } from "./lib/image";
-import { addPage, FIRST_RENDER, naturalSide, processPage, scan } from "./lib/store";
+import {
+  addPage,
+  FIRST_RENDER,
+  flushSave,
+  naturalSide,
+  processPage,
+  restoreProject,
+  scan,
+  scheduleSave,
+} from "./lib/store";
 
 type View = "camera" | "review" | "edit" | "pages";
 /** Where a photo came from: the shutter, or a file the user picked. */
@@ -27,10 +36,15 @@ const reviewBusy = ref(false);
 const pendingOrigin = ref<Origin>("camera");
 const reviewPhase = ref<"idle" | "searching" | "found" | "miss">("idle");
 const reviewFound = ref<Quad | null>(null);
+/** A second sheet in the same photo: the sheet asks instead of guessing. */
+const reviewSecond = ref<Quad | null>(null);
 const editorMode = ref<"result" | "frame">("result");
 /** Where the editor goes back to: the camera after a shot, the grid after a tap. */
 const editorReturn = ref<"camera" | "pages">("camera");
 const editorNotice = ref<string | null>(null);
+
+/** Pages brought back from the last session — worth one line, not a dialog. */
+const restoredCount = ref(0);
 
 const queue: Shot[] = [];
 /** Bumped whenever the review sheet is left, so a slow pass cannot resurrect it. */
@@ -65,6 +79,7 @@ function pump() {
     pendingOrigin.value = next.origin;
     reviewPhase.value = "idle";
     reviewFound.value = null;
+    reviewSecond.value = null;
     view.value = "review";
   }
 }
@@ -86,6 +101,7 @@ async function applyDetected(img: ImageData, quad: Quad) {
       rewriteWarp: true,
       maxSide: Math.min(FIRST_RENDER, naturalSide(page)),
     });
+    scheduleSave(page);
     editorMode.value = "result";
     editorNotice.value = null;
     editorReturn.value = "camera";
@@ -112,18 +128,31 @@ async function chooseAuto() {
 
   reviewBusy.value = true;
   busy = true;
+  let keepSheet = false;
   const started = performance.now();
   try {
     reviewPhase.value = "searching";
     reviewFound.value = null;
+    reviewSecond.value = null;
     // a sweep that vanishes in 80ms is a glitch, not an animation
     await sleep(120);
 
-    const quad = safeDetect(img);
+    const quads = safeDetectMany(img);
     const elapsed = performance.now() - started;
     if (elapsed < 300) await sleep(300 - elapsed);
     if (abandoned()) return;
 
+    if (quads.length > 1) {
+      // Two sheets are a genuine choice, not a detection result: show both and
+      // let the sheet ask. Nothing is created until the user says which.
+      reviewFound.value = quads[0];
+      reviewSecond.value = quads[1];
+      reviewPhase.value = "found";
+      keepSheet = true;
+      return;
+    }
+
+    const quad = quads[0] ?? null;
     if (quad) {
       reviewFound.value = quad;
       reviewPhase.value = "found";
@@ -144,10 +173,11 @@ async function chooseAuto() {
       view.value = "edit";
     }
   } finally {
-    if (!abandoned()) {
+    if (!abandoned() && !keepSheet) {
       pending.value = null;
       reviewPhase.value = "idle";
       reviewFound.value = null;
+      reviewSecond.value = null;
     }
     reviewBusy.value = false;
     busy = false;
@@ -155,14 +185,87 @@ async function chooseAuto() {
   }
 }
 
-/** Detection can throw on a strange image; that must never strand the flow. */
-function safeDetect(img: ImageData): Quad | null {
+/** "Scan both pages": one photo, two pages, the second prepared in the background. */
+async function chooseBoth() {
+  const img = pending.value;
+  const first = reviewFound.value;
+  const second = reviewSecond.value;
+  if (!img || !first || !second) return;
+  reviewToken++;
+  pending.value = null;
+  reviewPhase.value = "idle";
+  reviewFound.value = null;
+  reviewSecond.value = null;
+  tap();
+  await applyMany(img, [first, second]);
+}
+
+/** "Just the first one": the same path as a normal single detection. */
+async function chooseFirst() {
+  const img = pending.value;
+  const quad = reviewFound.value;
+  if (!img || !quad) return;
+  reviewToken++;
+  pending.value = null;
+  reviewPhase.value = "idle";
+  reviewFound.value = null;
+  reviewSecond.value = null;
+  await applyDetected(img, quad);
+}
+
+/**
+ * Several sheets from one photo. The first opens in the editor; the rest are
+ * rendered quietly afterwards, because a page without a thumbnail is a blank
+ * tile in the grid and that reads as a bug.
+ */
+async function applyMany(img: ImageData, quads: Quad[]) {
+  const pages = quads.map((quad) => {
+    const page = addPage(img, "scan");
+    page.quad = quad;
+    page.warped = null;
+    return page;
+  });
+  scan.activeId = pages[0].id;
+  scanThumb.value = makeThumb(img, 300, 400);
+  scanning.value = true;
+  thump();
+  await nextFrame();
   try {
-    return detectPageQuad(img, { effort: "thorough" });
+    await processPage(pages[0], {
+      full: true,
+      rewriteWarp: true,
+      maxSide: Math.min(FIRST_RENDER, naturalSide(pages[0])),
+    });
+    scheduleSave(pages[0]);
+    editorMode.value = "result";
+    editorNotice.value = null;
+    editorReturn.value = "camera";
+    view.value = "edit";
+    for (const page of pages.slice(1)) {
+      await processPage(page, {
+        full: true,
+        rewriteWarp: true,
+        maxSide: Math.min(FIRST_RENDER, naturalSide(page)),
+      });
+      scheduleSave(page);
+    }
+  } finally {
+    scanning.value = false;
+  }
+}
+
+/** Detection can throw on a strange image; that must never strand the flow. */
+function safeDetectMany(img: ImageData): Quad[] {
+  try {
+    return detectPageQuads(img, { effort: "thorough" }, 2);
   } catch (err) {
     console.warn("[scano] detection failed", err);
-    return null;
+    return [];
   }
+}
+
+function safeDetect(img: ImageData): Quad | null {
+  return safeDetectMany(img)[0] ?? null;
 }
 
 /** Manual path: the corner tool opens straight away, nothing is processed yet. */
@@ -202,6 +305,9 @@ function chooseWhole() {
 function retake() {
   reviewToken++;
   pending.value = null;
+  reviewPhase.value = "idle";
+  reviewFound.value = null;
+  reviewSecond.value = null;
   view.value = "camera";
   pump();
 }
@@ -236,11 +342,40 @@ function onKey(event: KeyboardEvent) {
   else if (view.value === "pages" || view.value === "review") goCamera();
 }
 
-onMounted(() => window.addEventListener("keydown", onKey));
+// The file name and paper size are part of the project, not part of a session.
+watch(
+  () => [scan.format, scan.filename],
+  () => scheduleSave()
+);
+
+/**
+ * A phone can close this tab without warning, and a debounced write that never
+ * ran is a scan the user lost. Hiding the app is the last reliable moment.
+ */
+function flushNow() {
+  void flushSave();
+}
+
+onMounted(async () => {
+  window.addEventListener("keydown", onKey);
+  window.addEventListener("pagehide", flushNow);
+  document.addEventListener("visibilitychange", flushNow);
+  // Bring back last session's pages. Their pixels are decoded lazily, so this
+  // costs a database read and nothing else — the camera starts regardless.
+  const restored = await restoreProject();
+  if (restored && scan.pages.length) {
+    restoredCount.value = restored;
+    window.setTimeout(() => (restoredCount.value = 0), 5200);
+  }
+});
+
 onBeforeUnmount(() => {
   // a detection pass that is still running must not touch a closed app
   reviewToken++;
   window.removeEventListener("keydown", onKey);
+  window.removeEventListener("pagehide", flushNow);
+  document.removeEventListener("visibilitychange", flushNow);
+  void flushSave();
 });
 </script>
 
@@ -252,6 +387,7 @@ onBeforeUnmount(() => {
         key="camera"
         :thumbs="scan.pages.map((p) => p.thumb).filter((t): t is string => !!t)"
         :page-count="scan.pages.length"
+        :restored="restoredCount"
         @captured="onCaptured"
         @open-pages="view = 'pages'"
       />
@@ -266,10 +402,13 @@ onBeforeUnmount(() => {
         :busy="reviewBusy"
         :phase="reviewPhase"
         :found="reviewFound"
+        :extra="reviewSecond"
         @auto="chooseAuto"
         @manual="chooseManual"
         @whole="chooseWhole"
         @retake="retake"
+        @both="chooseBoth"
+        @single="chooseFirst"
       />
 
       <EditorView

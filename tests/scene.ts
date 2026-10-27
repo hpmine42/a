@@ -12,6 +12,8 @@ export type SceneOptions = {
   height?: number;
   /** Paper corners, clockwise from the top-left. */
   corners: [Pt, Pt, Pt, Pt];
+  /** Further sheets in the same photo, e.g. an open book or two receipts. */
+  extra?: [Pt, Pt, Pt, Pt][];
   /** Luma of the paper and of the desk, 0..255. */
   paper?: number;
   desk?: number;
@@ -59,6 +61,7 @@ export function renderScene(options: SceneOptions): ImageData {
     width = 900,
     height = 700,
     corners,
+    extra = [],
     paper = 226,
     desk = 96,
     deskWarmth = 34,
@@ -82,29 +85,31 @@ export function renderScene(options: SceneOptions): ImageData {
     }
   }
 
-  // page: slightly shaded, neutral, with print
-  const cx = corners.reduce((s, p) => s + p.x, 0) / 4;
-  const top = Math.min(...corners.map((p) => p.y));
-  const bottom = Math.max(...corners.map((p) => p.y));
+  // pages: slightly shaded, neutral, with print
+  for (const sheet of [corners, ...extra]) {
+    const cx = sheet.reduce((sum, p) => sum + p.x, 0) / 4;
+    const top = Math.min(...sheet.map((p) => p.y));
+    const bottom = Math.max(...sheet.map((p) => p.y));
 
-  for (let y = Math.max(0, Math.floor(top) - 2); y < Math.min(height, Math.ceil(bottom) + 2); y++) {
-    for (let x = 0; x < width; x++) {
-      if (!inside(x + 0.5, y + 0.5, corners)) continue;
-      const n = noiseAt(x, y) * noise * 0.6;
-      // soft horizontal gradient + a shadow towards the bottom
-      const shade = shading * ((x - cx) / width) - shading * 0.6 * ((y - top) / Math.max(1, bottom - top));
-      let v = paper + n - shade;
-      if (text) {
-        const rel = (y - top) / Math.max(1, bottom - top);
-        const line = Math.floor(rel * 26);
-        const inLine = rel * 26 - line < 0.42 && line % 3 !== 2;
-        if (inLine && x % 7 !== 0) v -= 96;
+    for (let y = Math.max(0, Math.floor(top) - 2); y < Math.min(height, Math.ceil(bottom) + 2); y++) {
+      for (let x = 0; x < width; x++) {
+        if (!inside(x + 0.5, y + 0.5, sheet)) continue;
+        const n = noiseAt(x, y) * noise * 0.6;
+        // soft horizontal gradient + a shadow towards the bottom
+        const shade = shading * ((x - cx) / width) - shading * 0.6 * ((y - top) / Math.max(1, bottom - top));
+        let v = paper + n - shade;
+        if (text) {
+          const rel = (y - top) / Math.max(1, bottom - top);
+          const line = Math.floor(rel * 26);
+          const inLine = rel * 26 - line < 0.42 && line % 3 !== 2;
+          if (inLine && x % 7 !== 0) v -= 96;
+        }
+        const i = (y * width + x) * 4;
+        img.data[i] = v;
+        img.data[i + 1] = v;
+        img.data[i + 2] = v;
+        img.data[i + 3] = 255;
       }
-      const i = (y * width + x) * 4;
-      img.data[i] = v;
-      img.data[i + 1] = v;
-      img.data[i + 2] = v;
-      img.data[i + 3] = 255;
     }
   }
 

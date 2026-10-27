@@ -66,6 +66,45 @@ export function makeThumb(img: ImageData, w = 240, h = 320): string {
   return c.toDataURL("image/jpeg", 0.72);
 }
 
+/**
+ * Turn a page a quarter turn clockwise. Kept pure (no canvas) so the maths is
+ * testable: a rotation that is off by one row shows up as a one-pixel stripe of
+ * the desk along an edge of every exported page.
+ */
+export function rotateImageData(img: ImageData, quarter: number): ImageData {
+  const q = ((Math.round(quarter) % 4) + 4) % 4;
+  if (!q) return img;
+  const w = img.width;
+  const h = img.height;
+  const swap = q % 2 === 1;
+  const out = new ImageData(swap ? h : w, swap ? w : h);
+  const src = img.data;
+  const dst = out.data;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      let dx: number;
+      let dy: number;
+      if (q === 1) {
+        dx = h - 1 - y;
+        dy = x;
+      } else if (q === 2) {
+        dx = w - 1 - x;
+        dy = h - 1 - y;
+      } else {
+        dx = y;
+        dy = w - 1 - x;
+      }
+      const from = (y * w + x) * 4;
+      const to = (dy * out.width + dx) * 4;
+      dst[to] = src[from];
+      dst[to + 1] = src[from + 1];
+      dst[to + 2] = src[from + 2];
+      dst[to + 3] = src[from + 3];
+    }
+  }
+  return out;
+}
+
 export function slug(input: string): string {
   return (
     input

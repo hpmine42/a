@@ -6,7 +6,13 @@
  * cached — so the shell is precached on install and every navigation has an
  * offline fallback that is an actual page.
  */
-const CACHE = "scano-v2";
+/* Stamped at build time by vite.config.ts: a new deploy gets a new name, so the
+ * old shell is thrown away instead of being consulted forever. */
+const BUILD = "__BUILD__";
+const CACHE = `scano-shell-${BUILD}`;
+/** Everything the app fetches after launch, trimmed so it cannot grow forever. */
+const RUNTIME = `scano-assets-${BUILD}`;
+const MAX_RUNTIME = 60;
 const SHELL = ["./", "./manifest.webmanifest", "./icon-192.png", "./icon-512.png"];
 
 const abs = (path) => new URL(path, self.registration.scope).href;
@@ -48,11 +54,25 @@ self.addEventListener("activate", (event) => {
   event.waitUntil(
     (async () => {
       const keys = await caches.keys();
-      await Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)));
+      await Promise.all(keys.filter((k) => k !== CACHE && k !== RUNTIME).map((k) => caches.delete(k)));
       await self.clients.claim();
     })()
   );
 });
+
+/**
+ * Keep the runtime cache small.
+ *
+ * Hashed bundles change name on every deploy; without a ceiling the phone
+ * quietly accumulates a copy of every version ever visited. Oldest entries go
+ * first (CacheStorage returns them in insertion order).
+ */
+async function trimRuntime() {
+  const cache = await caches.open(RUNTIME);
+  const keys = await cache.keys();
+  if (keys.length <= MAX_RUNTIME) return;
+  await Promise.all(keys.slice(0, keys.length - MAX_RUNTIME).map((key) => cache.delete(key)));
+}
 
 self.addEventListener("fetch", (event) => {
   const request = event.request;
@@ -90,14 +110,19 @@ self.addEventListener("fetch", (event) => {
 
   event.respondWith(
     (async () => {
-      const cache = await caches.open(CACHE);
-      const cached = await cache.match(request);
+      const runtime = await caches.open(RUNTIME);
+      const cached = await runtime.match(request);
       const network = fetch(request)
         .then((response) => {
-          if (response.ok) cache.put(request, response.clone());
+          if (response.ok) {
+            void runtime
+              .put(request, response.clone())
+              .then(trimRuntime)
+              .catch(() => undefined);
+          }
           return response;
         })
-        .catch(() => cached);
+        .catch(async () => cached ?? (await caches.match(request)));
       return cached || network;
     })()
   );
