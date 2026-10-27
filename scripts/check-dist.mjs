@@ -83,6 +83,26 @@ if (!sw) {
   }
 }
 
+/**
+ * Text recognition runs in the browser, so its engine has to be *in* the build.
+ *
+ * If these are missing the button still appears and then fails on a phone that
+ * has no connection — which is exactly the kind of "it does not work" that only
+ * shows up in the one place nobody tests. The build downloads them, so a missing
+ * file means the download step failed silently.
+ */
+const OCR_FILES = [
+  "ocr/worker.min.js",
+  "ocr/core/tesseract-core-lstm.wasm.js",
+  "ocr/lang/eng.traineddata.gz",
+];
+for (const file of OCR_FILES) {
+  const info = await stat(join(dist, file)).catch(() => null);
+  if (!info?.isFile() || info.size < 1024) {
+    problems.push(`${file} is missing — text recognition would have no engine`);
+  }
+}
+
 if (problems.length) {
   console.error("dist check failed:");
   for (const p of problems) console.error("  - " + p);

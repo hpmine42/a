@@ -18,6 +18,8 @@ export type IconName =
   | "sparkle"
   | "rotate"
   | "share"
+  | "text"
+  | "copy"
   | "grip";
 </script>
 
@@ -111,6 +113,16 @@ export type IconName =
       <circle cx="14.5" cy="12" r="1.25" />
       <circle cx="9.5" cy="17" r="1.25" />
       <circle cx="14.5" cy="17" r="1.25" />
+    </template>
+    <template v-else-if="name === 'text'">
+      <path d="M5 6h14" />
+      <path d="M5 10.7h14" />
+      <path d="M5 15.4h9" />
+      <path d="M5 20h5.5" />
+    </template>
+    <template v-else-if="name === 'copy'">
+      <rect x="9" y="9" width="11" height="11" rx="2.4" />
+      <path d="M15 6.2A2.2 2.2 0 0 0 12.8 4H6.2A2.2 2.2 0 0 0 4 6.2v6.6A2.2 2.2 0 0 0 6.2 15" />
     </template>
     <template v-else-if="name === 'plus'">
       <path d="M12 5v14M5 12h14" />

@@ -1321,6 +1321,75 @@ function rowSampler(map: Float32Array, mw: number, mh: number, w: number, h: num
   };
 }
 
+/**
+ * Local minimum (or maximum) along a set of parallel lines, sliding window.
+ *
+ * `lineGap` is the distance between two lines and `step` the distance between
+ * two samples on a line, so one function does rows (gap w, step 1) and columns
+ * (gap 1, step w) without a transposed copy of the image.
+ *
+ * A monotonic deque keeps it O(samples) whatever the radius, which is what lets
+ * the window be sized for text rather than for speed.
+ */
+function lineExtremes(
+  src: Float32Array,
+  out: Float32Array,
+  lines: number,
+  samples: number,
+  lineGap: number,
+  step: number,
+  r: number,
+  wantMax: boolean
+): void {
+  const deque = new Int32Array(samples + 1);
+  for (let line = 0; line < lines; line++) {
+    let head = 0;
+    let tail = 0;
+    // `base` walks the line once; values are read relative to it
+    const base = line * lineGap;
+    const at = (i: number) => src[base + i * step];
+    for (let i = 0; i < samples + r; i++) {
+      if (i < samples) {
+        const v = at(i);
+        while (tail > head) {
+          const back = at(deque[tail - 1]);
+          if (wantMax ? back <= v : back >= v) tail--;
+          else break;
+        }
+        deque[tail++] = i;
+      }
+      const centre = i - r;
+      if (centre >= 0) {
+        // window is [centre - r, centre + r]; anything older has left it
+        while (deque[head] < centre - r) head++;
+        out[base + centre * step] = at(deque[head]);
+      }
+    }
+  }
+}
+
+/**
+ * Local minimum and maximum, separable: rows first, then columns.
+ *
+ * Knowing the darkest and the brightest value of a neighbourhood is what lets a
+ * pixel be described as "this far between paper and ink" instead of "darker than
+ * a number" — and that is what keeps a thin stroke thin (see `enhance`).
+ */
+function minMax(plane: Float32Array, w: number, h: number, radius: number) {
+  const r = Math.max(1, Math.round(radius));
+  const tmpMin = new Float32Array(w * h);
+  const tmpMax = new Float32Array(w * h);
+  const lo = new Float32Array(w * h);
+  const hi = new Float32Array(w * h);
+  // rows: one line per image row, samples next to each other
+  lineExtremes(plane, tmpMin, h, w, w, 1, r, false);
+  lineExtremes(plane, tmpMax, h, w, w, 1, r, true);
+  // columns: one line per image column, samples stacked a row apart
+  lineExtremes(tmpMin, lo, w, h, 1, w, r, false);
+  lineExtremes(tmpMax, hi, w, h, 1, w, r, true);
+  return { lo, hi };
+}
+
 function histOf(plane: Uint8Array | Float32Array, length = plane.length): Uint32Array {
   const hist = new Uint32Array(256);
   for (let i = 0; i < length; i++) hist[clamp(Math.round(plane[i]), 0, 255)]++;
@@ -1390,31 +1459,6 @@ function sharpen(plane: Uint8Array, w: number, h: number, amount: number): Uint8
     }
   }
   return out;
-}
-
-/**
- * Adaptive threshold, Sauvola on a small copy.
- *
- * The window is tied to the page size rather than to the output resolution, so a
- * 1200px preview and a 3000px export agree about what a letter is.
- */
-function thresholdMap(plane: Uint8Array | Float32Array, w: number, h: number, strength: number) {
-  const small = shrink(plane, w, h, 1100);
-  const { map: g, w: mw, h: mh } = small;
-  const k = 0.03 + (clamp(strength, 0, 100) / 100) * 0.32;
-  const R = 128;
-  const radius = Math.max(5, Math.round(Math.min(mw, mh) / 40));
-  const mean = blur(g, mw, mh, radius);
-  const sq = new Float32Array(g.length);
-  for (let i = 0; i < g.length; i++) sq[i] = g[i] * g[i];
-  const meanSq = blur(sq, mw, mh, radius);
-  const thr = new Float32Array(g.length);
-  for (let i = 0; i < g.length; i++) {
-    const m = mean[i];
-    const dev = Math.sqrt(Math.max(0, meanSq[i] - m * m));
-    thr[i] = m * (1 + k * (dev / R - 1));
-  }
-  return { thr, tw: mw, th: mh };
 }
 
 /**
@@ -1526,34 +1570,50 @@ export function enhance(src: ImageData, opts: EnhanceOpts): ImageData {
     return out;
   }
 
-  /* Optimize: smooth, threshold softly, clean the specks, write black on white.
+  /* Optimize: describe every pixel as "how far between paper and ink", then
+   * clean the specks and write black on white.
    *
-   * Smooth *before* the threshold, not sharpen: sensor grain and JPEG noise are
-   * exactly what a local threshold turns into black dots sprinkled over the
-   * page, and no threshold can tell that grain from a full stop. A 3×3 box is
-   * narrower than any glyph stroke, so nothing real is lost — and it is cheaper
-   * than the sharpening pass it replaces. */
+   * This used to be a Sauvola-style threshold: compare the pixel with a local
+   * mean and decide black/white, with a soft ramp to keep edges smooth. It read
+   * as a photocopier from 1995 — anything noticeably darker than its
+   * surroundings became *solid* black, so thin strokes grew and neighbouring
+   * letters merged (a "rn" turning into an "m" is what makes a scan unreadable
+   * for both eyes and OCR).
+   *
+   * What a scanner actually does is simpler and better: find the paper and the
+   * ink *of this neighbourhood* (the local max and min) and map the pixel in
+   * between. A stroke centre lands at 100% ink, its antialiased edge at 50%,
+   * paper at 0% — so a hairline stays a hairline, and text keeps the weight it
+   * had on the sheet. Flat areas (contrast below a floor) are paper by
+   * definition, which is also what removes a shadow without turning it grey.
+   */
   const smooth = blur(norm, w, h, 1);
-  const { thr, tw, th } = thresholdMap(smooth, w, h, opts.strength ?? 55);
-  const thrRow = rowSampler(thr, tw, th, w, h);
+  // The window has to cover a letter and a little more: too small and the
+  // inside of a bold stroke becomes "paper" again, too large and a shadow
+  // gradient starts to look like ink.
+  const radius = Math.max(4, Math.round(Math.min(w, h) / 70));
+  const { lo: darkest, hi: paper } = minMax(smooth, w, h, radius);
+  const strength = clamp(opts.strength ?? 55, 0, 100) / 100;
+  // A window whose ink and paper are almost the same value holds no text.
+  const minContrast = 44 - strength * 26;
+  // Where in the paper→ink range the ink starts. Higher strength = a wider band
+  // of grey counts as ink, which brings back a faint pencil line.
+  const knee = 0.34 - strength * 0.16;
   const ink = new Uint8Array(n);
-  const thrRowBuf = new Float32Array(w);
-  for (let y = 0; y < h; y++) {
-    thrRow(y, thrRowBuf);
-    const row = y * w;
-    for (let x = 0; x < w; x++) {
-      const i = row + x;
-      const t = thrRowBuf[x];
-      const soft = t * 0.22 + 8;
-      const v = (t - smooth[i]) / soft;
-      let cover = v >= 0.62 ? 255 : v <= 0.18 ? 0 : ((v - 0.18) / 0.44) * 255;
-      // Absolute white point. In an empty part of the page the local window has
-      // nothing but paper, so its deviation is tiny and soft shading lands just
-      // under the threshold — as grey smudges in the middle of a blank sheet.
-      // Anything this bright is paper, whatever the local statistics say.
-      if (smooth[i] >= 200) cover = 0;
-      ink[i] = cover;
+  for (let i = 0; i < n; i++) {
+    const light = paper[i];
+    const dark = darkest[i];
+    const span = light - dark;
+    if (span < minContrast || light < 28) {
+      ink[i] = 0;
+      continue;
     }
+    // 0 at the brightest value of the window, 1 at the darkest
+    const v = (light - smooth[i]) / span;
+    // Below the knee nothing is printed; above it the ramp is steep enough for
+    // a crisp edge but still smooth, which is what antialiasing is.
+    const cover = (v - knee) / (0.92 - knee);
+    ink[i] = cover <= 0 ? 0 : cover >= 1 ? 255 : cover * 255;
   }
 
   /* Despeckle and expand to RGBA in one pass: a lone dark pixel is grain, never

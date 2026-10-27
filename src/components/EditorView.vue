@@ -13,13 +13,16 @@ import {
   autoDetect,
   EDGE_INSET,
   ensureSource,
+  forgetText,
   naturalSide,
   PREVIEW_MAX,
   processPage,
+  readPageText,
   rotatePage,
   scan,
   scheduleSave,
 } from "../lib/store";
+import { OcrError, wordCount, type OcrProgress } from "../lib/ocr";
 
 const props = withDefaults(
   defineProps<{
@@ -71,6 +74,136 @@ const stage = ref<HTMLDivElement | null>(null);
 const resultCanvas = ref<HTMLCanvasElement | null>(null);
 const pageIndex = computed(() => scan.pages.findIndex((p) => p.id === scan.activeId) + 1);
 const optimizing = computed(() => page.value?.opts.optimize ?? false);
+
+/* -------------------------------------------------------------- words */
+
+/** What the text engine is doing right now, for the label under the page. */
+const reading = ref(false);
+const readStep = ref<OcrProgress | null>(null);
+const readError = ref<string | null>(null);
+/** The sheet with the words on it. */
+const showText = ref(false);
+const copied = ref(false);
+let copiedTimer = 0;
+
+const words = computed(() => wordCount(page.value?.ocr));
+const content = computed(() => page.value?.ocr ?? null);
+
+/** The one line that says what the button will do — and what it just did. */
+const textLabel = computed(() => {
+  if (reading.value) return "Reading the page…";
+  if (readError.value) return readError.value;
+  if (words.value) return `Text · ${words.value} words`;
+  return "Find the text";
+});
+
+const textHint = computed(() => {
+  if (reading.value) {
+    const step = readStep.value;
+    if (!step) return "Starting the engine";
+    const pct = Math.round(step.value * 100);
+    if (step.stage === "engine") return "Starting the engine…";
+    if (step.stage === "language") return `Loading English… ${pct}%`;
+    return `Reading the page… ${pct}%`;
+  }
+  if (readError.value) return "Tap to try again";
+  if (words.value) return "Tap to read it, or copy it";
+  return "Runs on this device · works offline";
+});
+
+const textLayerOn = computed({
+  get: () => page.value?.textLayer !== false,
+  set: (next: boolean) => {
+    const current = page.value;
+    if (!current) return;
+    current.textLayer = next;
+    scheduleSave(current);
+    click();
+  },
+});
+
+/**
+ * Read the words on this page.
+ *
+ * The first tap on a device also fetches the engine (~5 MB, once, and the cache
+ * keeps it), so the bar says what it is doing while that happens instead of
+ * pretending to think. A page that has already been read just opens — running
+ * the engine again would be slow and pointless.
+ */
+async function findText() {
+  const current = page.value;
+  if (!current || reading.value) return;
+  click();
+  readError.value = null;
+  if (current.ocr) {
+    showText.value = true;
+    return;
+  }
+  reading.value = true;
+  readStep.value = null;
+  try {
+    await readPageText(current, (step) => (readStep.value = step));
+    showText.value = true;
+  } catch (err) {
+    console.warn("[scano] text recognition failed", err);
+    readError.value =
+      err instanceof OcrError && err.reason === "engine"
+        ? "The text engine did not load — connect once, then it works offline"
+        : "No text could be read on this page";
+  } finally {
+    reading.value = false;
+    readStep.value = null;
+  }
+}
+
+/** Read the page once more — for a photo where the first pass was poor. */
+async function readAgain() {
+  const current = page.value;
+  if (!current || reading.value) return;
+  click();
+  current.ocr = null;
+  scheduleSave(current);
+  showText.value = false;
+  await findText();
+}
+
+/**
+ * Put the text on the clipboard.
+ *
+ * `navigator.clipboard` needs a secure context and a real user gesture; the old
+ * selection trick is the fallback, because a Copy button that silently does
+ * nothing is worse than no Copy button.
+ */
+async function copyText() {
+  const text = content.value?.text ?? "";
+  if (!text) return;
+  click();
+  let done = false;
+  try {
+    await navigator.clipboard.writeText(text);
+    done = true;
+  } catch {
+    done = false;
+  }
+  if (!done) {
+    const field = document.createElement("textarea");
+    field.value = text;
+    field.setAttribute("readonly", "");
+    field.style.position = "fixed";
+    field.style.opacity = "0";
+    document.body.appendChild(field);
+    field.select();
+    try {
+      done = document.execCommand("copy");
+    } catch {
+      done = false;
+    }
+    field.remove();
+  }
+  copied.value = done;
+  window.clearTimeout(copiedTimer);
+  copiedTimer = window.setTimeout(() => (copied.value = false), 2200);
+}
 
 let observer: ResizeObserver | null = null;
 let drawFrame = 0;
@@ -255,6 +388,8 @@ function onQuad(next: Quad) {
   current.quad = next;
   // hand-placed corners are a real crop, so they get the protective inset again
   current.whole = false;
+  // words were found inside the old crop: their boxes are no longer true
+  forgetText(current);
   current.warped = null;
   current.warpedSide = 0;
   current.cacheKey = "";
@@ -442,6 +577,7 @@ onBeforeUnmount(() => {
   window.clearTimeout(busyTimer);
   if (drawFrame) cancelAnimationFrame(drawFrame);
   window.clearTimeout(noticeTimer);
+  window.clearTimeout(copiedTimer);
 });
 
 defineExpose({ openFrame: () => (mode.value = "frame") });
@@ -521,6 +657,30 @@ defineExpose({ openFrame: () => (mode.value = "frame") });
       </Transition>
     </div>
 
+    <!--
+      The words on the page. A quiet row under the sheet, because reading text is
+      something you do to a page, not something you do instead of fixing it — and
+      the dock above it stays exactly as big as it was.
+    -->
+    <div v-if="mode === 'result'" class="text-bar">
+      <button
+        class="text-open"
+        :class="{ ready: words > 0, failed: Boolean(readError) }"
+        :disabled="reading"
+        :aria-label="words ? 'Read the text found on this page' : 'Find the text on this page'"
+        @click="findText"
+      >
+        <span class="text-icon" aria-hidden="true">
+          <span v-if="reading" class="spinner" />
+          <Icon v-else name="text" :size="18" :stroke="1.7" />
+        </span>
+        <span class="text-lines">
+          <strong>{{ textLabel }}</strong>
+          <small>{{ textHint }}</small>
+        </span>
+      </button>
+    </div>
+
     <footer class="editor-dock" :class="{ cropping: mode === 'frame' }">
       <button
         v-if="mode === 'frame'"
@@ -557,5 +717,45 @@ defineExpose({ openFrame: () => (mode.value = "frame") });
         </button>
       </template>
     </footer>
+
+    <Teleport to="body">
+      <div v-if="showText && content" class="text-sheet-wrap" @click.self="showText = false">
+        <section class="text-sheet" role="dialog" aria-modal="true" aria-label="Text on this page">
+          <header class="text-sheet-top">
+            <strong>Text on this page</strong>
+            <button class="text-again" :disabled="reading" @click="readAgain">Read again</button>
+            <button class="control" aria-label="Close the text" @click="showText = false">
+              <Icon name="close" :size="18" :stroke="2" />
+            </button>
+          </header>
+
+          <textarea
+            class="text-body"
+            readonly
+            spellcheck="false"
+            aria-label="The recognised text"
+            :value="content.text"
+          />
+
+          <p class="text-meta">
+            {{ words }} {{ words === 1 ? "word" : "words" }} · found on this device
+          </p>
+
+          <label class="text-layer">
+            <input v-model="textLayerOn" type="checkbox" :disabled="!words" />
+            <span class="text-layer-box" aria-hidden="true"><Icon name="check" :size="13" :stroke="3" /></span>
+            <span class="text-layer-text">
+              <strong>Text layer in the PDF</strong>
+              <small>Invisible, so the scan still looks like a scan — but it can be searched and copied.</small>
+            </span>
+          </label>
+
+          <button class="text-copy" @click="copyText">
+            <Icon :name="copied ? 'check' : 'copy'" :size="18" :stroke="copied ? 2.6 : 1.8" />
+            <span>{{ copied ? "Copied" : "Copy text" }}</span>
+          </button>
+        </section>
+      </div>
+    </Teleport>
   </div>
 </template>

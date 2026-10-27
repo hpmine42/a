@@ -39,8 +39,13 @@ jobs:
       - name: UI tests (jsdom)
         run: npm test
 
+      # Also fetches the OCR engine into public/ocr (prebuild) — the step below
+      # needs it, and check-dist fails if it is missing from the build.
       - name: Build (relative asset paths + dist asset check)
         run: npm run build
+
+      - name: Text recognition (real engine, real page)
+        run: npm run test:ocr
 
       - name: Upload site
         uses: actions/upload-artifact@v4

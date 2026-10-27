@@ -30,18 +30,40 @@ leaves the device.
 
 Every scanner app wants an account, an upload, or a subscription — for a task
 that is a perspective transform and a threshold. Scano is that transform and
-that threshold, in ~1,200 lines of TypeScript, with the photo never leaving the
+that threshold, in ~7,000 lines of TypeScript, with the photo never leaving the
 phone. MIT, no backend, no analytics, no CDN.
 
 ## Before / after
 
-| Camera photo | Scano |
-|---|---|
-| ![](docs/before.jpg) | ![](docs/after.jpg) |
+<table>
+<tr>
+<td width="50%"><img src="docs/before.jpg" alt="A phone photo of an invoice on a wooden desk, at an angle"></td>
+<td width="50%"><img src="docs/after.jpg" alt="The same invoice as a clean scan: straight, black on white"></td>
+</tr>
+<tr>
+<td align="center"><sub><b>Camera photo</b> — desk, shadow, 12° of skew</sub></td>
+<td align="center"><sub><b>Scano</b> — straightened, shadows gone, text sharp</sub></td>
+</tr>
+</table>
 
-Both images come from the demo photo that ships with the app. Before is the raw
-camera frame — desk, shadow, skew. After is what the export produces with
-*Optimize* switched on.
+And the same page at 2×, because a full page shrunk into a README column is not
+where you can judge a scanner:
+
+<table>
+<tr>
+<td width="50%"><img src="docs/detail-before.jpg" alt="Detail: the straightened photo, before Optimize"></td>
+<td width="50%"><img src="docs/detail.jpg" alt="Detail: after Optimize, clean black text on white"></td>
+</tr>
+<tr>
+<td align="center"><sub>straightened, as photographed</sub></td>
+<td align="center"><sub><i>Optimize</i></sub></td>
+</tr>
+</table>
+
+Both pictures are produced by the app's own pipeline, not by hand: `npm run
+docs:images` detects the page in the demo photo, warps it with the same inset the
+app uses, runs *Optimize* at the same strength, and writes the four files. If a
+change ever makes the output worse, the picture gets worse with it.
 
 ## What it does
 
@@ -68,6 +90,12 @@ camera frame — desk, shadow, skew. After is what the export produces with
   **stops**. Nothing is created until you choose: *Use this crop* or *Crop it
   myself*. A search that finds nothing says so and leaves the same three choices
   on the sheet instead of opening a tool nobody asked for.
+- **Text you can search, without an upload.** *Find the text* reads the page with
+  Tesseract compiled to WebAssembly, in a worker, from files served by this site —
+  no CDN, no API, no request that leaves the tab. The words appear in a sheet you
+  can select and copy, and go into the PDF as an **invisible text layer**: the
+  page still looks like the scan, but a reader can search it, select a sentence,
+  and copy the invoice number instead of retyping it.
 - **One switch, no look-hunting.** *Optimize* is off by default, because the
   photo as taken is the honest starting point; switched on it flattens the
   lighting, whitens the paper and sharpens the text. It then appears in the dock
@@ -193,9 +221,23 @@ light is never even. So `enhance()` works in this order:
 3. **Smooth** with a 3×3 box in Optimize mode — a threshold cannot tell sensor
    grain from a full stop, so the grain goes first. (Colour mode sharpens with
    an unsharp mask instead; there the pixels are the product.)
-4. **Threshold** (B&W) with a Sauvola map computed on a small copy and sampled
-   back up — soft edges, so small type stays readable instead of turning into
-   speckle.
+4. **Map paper → ink** (B&W). Not a threshold: for every pixel the pass takes
+   the local maximum and minimum (a sliding-window deque, so it costs the same
+   whatever the window size) and reads the pixel as *how far between the paper
+   and the ink of this neighbourhood* it sits. A stroke centre lands at 100%
+   ink, its antialiased edge at 50%, blank paper at 0%.
+
+That last step is a rewrite, and it is the one that made text readable. The old
+pass was a Sauvola threshold: compare the pixel with a local mean and decide
+black or white. Anything noticeably darker than its surroundings became *solid*
+black — so thin strokes fattened, neighbouring letters merged, and a scanned "rn"
+came out as an "m". A photocopier from 1995, at the exact moment a phone photo
+needs the opposite. Mapping between the local white and the local black instead
+keeps the weight the letters had on the sheet: thin stays thin, and the
+counters of an "e" or an "a" survive. The window is sized to cover a letter
+(~1/70 of the short side); a neighbourhood with less than ~30 levels of
+contrast holds no text and is paper by definition, which removes a shadow
+without leaving a grey film.
 
 Imports are read at up to 3600px, exports at 3000px, and neither is ever scaled
 above what the photo actually contains. Anything that would exceed 8 megapixels
@@ -250,13 +292,59 @@ with Sauvola. Colour is used throughout: a pale
 wooden desk can match paper in brightness while being obviously different in
 hue, which is exactly where a luma-only detector fails.
 
+## Text, offline
+
+Searchable PDFs usually mean a cloud OCR subscription, and on iOS/Android the
+easy answer is Google's ML Kit — *"extract text instantly without internet
+access"*. That promise is real, but ML Kit's on-device text recognition ships as
+an **Android/iOS library**. There is no browser build of it: a web page cannot
+call it, and the only thing on the web that would is a network request to a
+service, which is the thing this app exists to avoid.
+
+The browser equivalent — the same "no internet, nothing leaves the device"
+promise — is [Tesseract](https://github.com/tesseract-ocr/tesseract) compiled to
+WebAssembly, which is what runs here:
+
+- **On this device, in a worker.** `tesseract.js` + the LSTM engine + the English
+  model, served from `scano/ocr/` on the same origin. No CDN and no API: with the
+  network unplugged, recognition still runs.
+- **Fetched on the first tap, not on launch.** The engine is ~4.5 MB on the wire
+  (a 1.4 MB gzipped WASM binary with the engine inlined, a 2.9 MB English model,
+  a 34 kB worker). It is cached
+  by the service worker's runtime cache, so the second page and every page after
+  that — and every launch, offline included — costs nothing. People who never tap
+  *Find the text* never download it, which is why the app still loads in 54 kB.
+- **On the finished page.** The engine reads the warped, straightened page, and
+  with *Optimize* on it reads the black-on-white version — the input it was tuned
+  for. Measured on the demo photo: a whole invoice page in well under two seconds
+  on a phone-class CPU, at ~1,800px on the long side (below that, letters merge
+  and the output is fiction; above it, accuracy stops improving and the wait
+  just grows).
+- **As an invisible text layer.** Each word is written into the PDF at the spot
+  it was found, at its own size and horizontal scale, in invisible render mode.
+  The page looks exactly like the scan; the file is searchable, selectable and
+  copyable. The text layer can be switched off per page, and a page without
+  recognised text exports byte-for-byte as before. Recognised words survive a
+  reload (they are a few kB, stored with the page) and are thrown away when the
+  crop or the rotation changes, because their boxes would no longer be true.
+
+Honest limits: it is English-only for now, handwriting is a coin flip, and a
+blurred photo stays blurred — recognition reads what the pipeline produced, so
+*Optimize* helps the text as much as it helps the eye.
+
 ## Run it
 
 ```bash
 npm install
 npm run dev        # http://localhost:5173
 npm run build      # static site in dist/
+npm run test:cv    # the CV pipeline, on the demo photo
+npm run docs:images # regenerate the before/after pictures
 ```
+
+`npm install`/`npm run dev`/`npm run build` also fetch the OCR engine into
+`public/ocr/` (~6.5 MB, once per checkout, `npm run ocr:assets`) — it is not in
+git, because cloning a repository should not mean downloading a language model.
 
 If the browser blocks camera access (or you are on desktop), the app offers
 **Demo photo** so the whole flow is still one tap away.
@@ -266,17 +354,19 @@ If the browser blocks camera access (or you are on desktop), the app offers
 ```
 src/components/   CameraView, CaptureReview, EditorView, CornerEditor, PagesView
 src/lib/cv.ts     detection, homography warp, enhancement — no dependencies
-src/lib/pdf.ts    jsPDF layout; fitOnPage is pure and unit-tested
+src/lib/ocr.ts    text recognition in a worker; boxes normalised to the page
+src/lib/pdf.ts    jsPDF layout; fitOnPage and textLayerRuns are pure and tested
 src/lib/store.ts  pages, options, the preview/export resolution budgets
 src/lib/orient.ts the photo frame ↔ the page frame, for turned pages
 src/lib/storage.ts IndexedDB (with an in-memory twin the tests drive)
 src/lib/share.ts  the share sheet, and the download it falls back to
 src/lib/fit.ts    the UI scale that undoes a browser's desktop-mode shrink
-scripts/          test-cv.ts (real pipeline), check-dist.mjs (deploy guard)
+scripts/          test-cv.ts (real pipeline), check-dist.mjs (deploy guard),
+                  fetch-ocr-assets.mjs (the OCR engine), make-demo.ts (docs/)
 ```
 
-Nothing in `src/lib` touches the network. The service worker only caches the
-app's own files, which is why "works offline" is a property and not a promise.
+Nothing in `src/lib` sends anything anywhere: the text engine is fetched from
+this site and runs in the tab. The service worker only caches the app's own files, which is why "works offline" is a property and not a promise.
 The only thing that leaves the device is a PDF the user explicitly shares.
 
 Offline is covered by `tests/offline.test.ts`, which runs the real `public/sw.js`
@@ -292,8 +382,13 @@ worker does not carry every bundle `index.html` needs.
 ```bash
 npm run typecheck  # vue-tsc, strict
 npm run test:cv    # real CV pipeline on the demo photo, with assertions
+npm run test:ocr   # the real text engine on the same page (65 words, ~1s)
 npm test           # UI flows, detection on synthetic scenes, loupe maths, PDF geometry
 ```
+
+`test:ocr` runs Tesseract for real: it reads `docs/after.jpg` and fails if the
+invoice's number, its total or its payment terms are not in the output — a mocked
+recogniser can prove the wiring, not that the shipped language model works.
 
 `test:cv` is the honest one: it detects the page in `public/samples/letter.jpg`,
 checks the corners against hand-measured coordinates, and fails the build if the
@@ -305,7 +400,7 @@ canvas → image mapping that the magnifier depends on, and
 `tests/orient.test.ts` proves that cropping a turned page gives the same picture
 as turning the photo and cropping there.
 
-The B&W output runs a despeckle pass after the adaptive threshold: paper grain
+The B&W output runs a despeckle pass after the ink mapping: paper grain
 and JPEG noise become visible dirt once a page is pure black and white, and
 isolated pixels are not glyphs.
 

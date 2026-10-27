@@ -263,6 +263,47 @@ describe("web app manifest", () => {
   });
 });
 
+describe("text recognition", () => {
+  const store = read("src/lib/store.ts");
+  const ocr = read("src/lib/ocr.ts");
+  const fetchAssets = read("scripts/fetch-ocr-assets.mjs");
+  const config = read("vite.config.ts");
+
+  it("reads the finished page at a size where letters still exist", () => {
+    // 900 (the preview) merges letters; the export size only costs time
+    expect(store).toMatch(/export const OCR_SIDE = 1800;/);
+    expect(store).toMatch(/processPage\(page, \{ full: true, maxSide: OCR_SIDE \}\)/);
+  });
+
+  it("runs from our own origin, in a worker, with no CDN in the path", () => {
+    expect(ocr).toMatch(/workerPath: asset\("worker\.min\.js"\)/);
+    expect(ocr).toMatch(/corePath: asset\("core\/tesseract-core-lstm\.wasm\.js"\)/);
+    expect(ocr).toMatch(/langPath: asset\("lang"\)/);
+    // a scanner that quietly fetches its engine from jsDelivr is not a scanner
+    // that keeps the page on the device
+    // and the worker is loaded from our own URL, so the service worker can
+    // cache it: a blob worker escapes the fetch handler entirely
+    expect(ocr).toMatch(/workerBlobURL: false/);
+    expect(ocr).not.toMatch(/cdn\.jsdelivr/);
+    expect(ocr).not.toMatch(/https?:\/\//);
+  });
+
+  it("is fetched by the build, and never precached", () => {
+    // 10 MB of WASM is not something every visitor should download on launch
+    expect(fetchAssets).toMatch(/4\.0\.0_best_int/);
+    expect(fetchAssets).toMatch(/tesseract-core-lstm\.wasm/);
+    expect(config).toMatch(/\/\^ocr\\\//);
+    expect(read(".gitignore")).toMatch(/public\/ocr\//);
+  });
+
+  it("writes the words into the PDF as invisible text", () => {
+    const pdf = read("src/lib/pdf.ts");
+    expect(pdf).toMatch(/renderingMode: "invisible"/);
+    expect(pdf).toMatch(/export function textLayerRuns/);
+    expect(pdf).toMatch(/if \(page\.ocr && hasTextLayer\(page\)\)/);
+  });
+});
+
 describe("service worker", () => {
   const sw = read("public/sw.js");
   const config = read("vite.config.ts");
