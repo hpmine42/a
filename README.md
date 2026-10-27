@@ -49,7 +49,9 @@ camera frame — desk, shadow, skew. After is what the export produces with
   a worker finds the sheet ~2-3×/second and the outline eases into place.
 - **The shutter is never a surprise.** If the viewfinder is already framing a
   sheet, that crop is used without asking. If it is not, Scano asks: crop by
-  hand, detect this photo, or keep the whole frame.
+  hand, detect this photo, or keep the whole frame — *Keep the whole photo* goes
+  straight to the finished page, because the crop tool is exactly what it was
+  just told not to use. Cropping stays one tap away in the page header.
 - **Manual framing that actually lands.** Drag any corner with a magnifier loupe
   (it shows exactly the pixel under your finger), or drag the whole sheet. The
   crop tool has exactly one button — *Done cropping* — and the page is rendered

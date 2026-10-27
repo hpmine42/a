@@ -335,21 +335,32 @@ function chooseManual() {
   view.value = "edit";
 }
 
-/** Keep the whole photo as-is. */
-function chooseWhole() {
+/**
+ * "Keep the whole photo" means exactly that: no crop tool, no corner hunting.
+ *
+ * The page is the photo, rendered straight away with the current filter. Opening
+ * the corner tool here contradicted the label — the user had just said they do
+ * not want a crop — so the crop tool is now only one tap away from the finished
+ * page ("Crop" in the editor header), never in the way of it.
+ */
+async function chooseWhole() {
   const img = pending.value;
   if (!img) return;
   resolveSweep();
   reviewToken++;
-  pending.value = null;
   tap();
-  const page = addPage(img, "scan");
-  page.quad = fullFrameQuad(img.width, img.height);
-  page.warped = null;
-  editorMode.value = "frame";
-  editorNotice.value = "Drag the corners if you want a tighter crop";
-  editorReturn.value = "camera";
-  view.value = "edit";
+  // Stay on the sheet until the page exists: clearing `pending` first would
+  // unmount the review and flash the pages grid for a frame.
+  reviewBusy.value = true;
+  try {
+    await applyDetected(img, fullFrameQuad(img.width, img.height));
+  } finally {
+    reviewBusy.value = false;
+    pending.value = null;
+    reviewPhase.value = "idle";
+    reviewFound.value = null;
+    reviewSecond.value = null;
+  }
 }
 
 function retake() {
