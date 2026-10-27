@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import Icon from "./Icon.vue";
 import type { Quad } from "../lib/cv";
-import { prefersReducedMotion } from "../lib/anim";
+import { prefersReducedMotion, SWEEP_MS } from "../lib/anim";
 import { canvasFor } from "../lib/image";
 import { containFit } from "../lib/geometry";
 
@@ -32,6 +32,10 @@ const emit = defineEmits<{
   (e: "retake"): void;
   (e: "both"): void;
   (e: "single"): void;
+  /** "Use this crop": the search found a page and the user agreed with it. */
+  (e: "confirm"): void;
+  /** "Crop it myself": the search found a page, the user wants the corners. */
+  (e: "adjust"): void;
 }>();
 
 const canvas = ref<HTMLCanvasElement | null>(null);
@@ -64,6 +68,7 @@ const subtitle = computed(() => {
 /** Two sheets: the sheet stays up and asks which, because this one *is* a question. */
 const asking = computed(() => props.phase === "found" && Boolean(props.extra));
 const showChoices = computed(() => props.phase !== "searching" && props.phase !== "found");
+
 
 function fitFor(w: number, h: number) {
   const pad = 12;
@@ -101,10 +106,16 @@ function draw() {
   const sx = (p: { x: number; y: number }) => ({ x: dx + p.x * fit.scale, y: dy + p.y * fit.scale });
 
   if (props.phase === "searching") {
-    // a single bright band travelling down the photo: the honest picture of
-    // "one pass over the photo", and it finishes when the pass does
-    const sweep = ((performance.now() - phaseStart) / 850) % 1;
-    const y = dy + dh * (0.04 + sweep * 0.92);
+    /*
+     * One pass, top to bottom, then done.
+     *
+     * This used to cycle and to stop wherever the detector happened to finish —
+     * usually in the middle of the page — which made the scan look like it had
+     * only covered half the photo. The band now always travels the whole page
+     * once, and detection waits for it (see SWEEP_MS).
+     */
+    const sweep = Math.min(1, (performance.now() - phaseStart) / SWEEP_MS);
+    const y = dy + dh * (0.03 + sweep * 0.94);
     // the band belongs to the photo, not to the sheet around it
     ctx.save();
     ctx.beginPath();
@@ -114,6 +125,8 @@ function draw() {
     band.addColorStop(0, "rgba(255, 192, 97, 0)");
     band.addColorStop(0.5, "rgba(255, 192, 97, 0.3)");
     band.addColorStop(1, "rgba(255, 192, 97, 0)");
+    // the band eases out as it leaves the page, so it does not just vanish
+    ctx.globalAlpha = sweep > 0.9 ? Math.max(0, 1 - (sweep - 0.9) / 0.1) : 1;
     ctx.fillStyle = band;
     ctx.fillRect(dx, y - 60, dw, 120);
     ctx.beginPath();
@@ -122,6 +135,7 @@ function draw() {
     ctx.lineWidth = 2;
     ctx.strokeStyle = "rgba(255, 214, 152, 0.95)";
     ctx.stroke();
+    ctx.globalAlpha = 1;
     ctx.restore();
     ctx.strokeStyle = "rgba(255, 255, 255, 0.16)";
     ctx.lineWidth = 1;
@@ -198,6 +212,9 @@ function frame() {
   raf = 0;
   draw();
   if (props.phase === "searching") {
+    // stop at the end of the pass instead of looping under the reveal
+    const done = performance.now() - phaseStart >= SWEEP_MS;
+    if (!done || prefersReducedMotion()) return;
     raf = requestAnimationFrame(frame);
     return;
   }
@@ -260,6 +277,24 @@ watch(() => props.src, draw);
         <strong>{{ title }}</strong>
         <span>{{ subtitle }}</span>
       </p>
+
+      <template v-if="props.phase === 'found' && props.found && !props.extra">
+        <button class="choice primary reveal" @click="emit('confirm')">
+          <span class="choice-icon"><Icon name="check" :size="22" /></span>
+          <span class="choice-text">
+            <strong>Use this crop</strong>
+            <small>Straighten the page inside that outline</small>
+          </span>
+        </button>
+
+        <button class="choice reveal" @click="emit('adjust')">
+          <span class="choice-icon"><Icon name="crop" :size="22" /></span>
+          <span class="choice-text">
+            <strong>Crop it myself</strong>
+            <small>Drag the four corners where you want them</small>
+          </span>
+        </button>
+      </template>
 
       <template v-if="asking">
         <button class="choice primary" @click="emit('both')">

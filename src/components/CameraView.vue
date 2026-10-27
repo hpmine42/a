@@ -464,70 +464,74 @@ async function focusAt(clientX: number, clientY: number) {
   const rect = el.getBoundingClientRect();
   const x = clientX - rect.left;
   const y = clientY - rect.top;
+
+  /*
+   * Feedback first, hardware second.
+   *
+   * The previous version only drew the ring after the lens confirmed the focus
+   * point — and because most browsers resolve an unknown constraint without
+   * reporting it back, "confirmed" almost never happened, so a tap did nothing
+   * at all. A tap is a request; what the phone can honour varies by browser.
+   * So the ring and the haptic come immediately, always, and the focus request
+   * follows. If literally nothing could be asked for, the ring stays honest with
+   * a one-line note.
+   */
+  tap();
+  focusRing.value = { x, y };
+  focusSeq.value++;
+  window.clearTimeout(focusTimer);
+  focusTimer = window.setTimeout(() => (focusRing.value = null), 900);
+
   const track = stream?.getVideoTracks()[0];
   const map = coverRect();
   const v = video.value;
-  if (!track || !map || !v?.videoWidth) return;
+  if (!track) {
+    noteFocusUnavailable();
+    return;
+  }
+  if (!map || !v?.videoWidth) return;
 
   /** The tap, as the camera's normalised coordinates (0..1 of the frame). */
   const point = {
     x: Math.min(1, Math.max(0, (x - map.dx) / (v.videoWidth * map.scale))),
     y: Math.min(1, Math.max(0, (y - map.dy) / (v.videoHeight * map.scale))),
   };
-  const mode = focusModes.includes("single-shot") ? "single-shot" : focusModes[0];
+  const canSingleShot = focusModes.includes("single-shot");
 
   /**
-   * Three ways to ask, most precise first. `pointsOfInterest` is what makes the
-   * focus follow the finger; where it is ignored, a plain `single-shot` still
-   * re-runs the autofocus search — the camera then focuses on its own window,
-   * so the ring has to move to the middle rather than lie about the spot.
+   * Ask for the tap, then for a plain refocus, then give up quietly.
+   *
+   * These are tried unconditionally rather than gated on `getCapabilities()`:
+   * reports are patchy (several Android builds list no focus modes at all while
+   * accepting them), and a resolved `applyConstraints` is taken as acceptance —
+   * Chrome applies `pointsOfInterest` without ever echoing it in `getSettings()`,
+   * so requiring the echo rejected a request that had actually worked.
    */
-  const attempts: { constraints: FocusConstraint; at: { x: number; y: number } }[] = [
-    { constraints: { pointsOfInterest: [point], focusMode: mode }, at: { x, y } },
-    { constraints: { pointsOfInterest: [point] }, at: { x, y } },
-    { constraints: { focusMode: mode }, at: { x: rect.width / 2, y: rect.height / 2 } },
+  const attempts: FocusConstraint[] = [
+    { pointsOfInterest: [point] },
+    { pointsOfInterest: [point], focusMode: "single-shot" },
+    { focusMode: "single-shot" },
   ];
 
-  let applied: { x: number; y: number } | null = null;
-  for (const attempt of attempts) {
+  let applied = false;
+  for (const constraints of attempts) {
     try {
-      await track.applyConstraints({ advanced: [attempt.constraints] } as FocusConstraints);
-      // A browser that does not know the constraint can resolve anyway, so the
-      // attempt only counts if the track then reports the thing it was asked for.
-      const settings = track.getSettings() as unknown as {
-        pointsOfInterest?: { x: number; y: number }[];
-        focusMode?: string;
-      };
-      const tookPoints = Array.isArray(settings.pointsOfInterest) && settings.pointsOfInterest.length > 0;
-      const tookMode = attempt.constraints.focusMode ? settings.focusMode === mode : true;
-      if (attempt.constraints.pointsOfInterest && !tookPoints) continue;
-      if (!tookMode && !tookPoints) continue;
-      applied = attempt.at;
+      await track.applyConstraints({ advanced: [constraints] } as FocusConstraints);
+      applied = true;
       break;
     } catch {
-      /* try the next, less demanding request */
+      /* the next, less demanding request */
     }
   }
 
   if (!applied) {
-    // Nothing to focus: say it once instead of flashing a ring that means nothing
-    if (!focusNotice.value) {
-      window.clearTimeout(focusNoticeTimer);
-      focusNotice.value = "This lens focuses by itself";
-      focusNoticeTimer = window.setTimeout(() => (focusNotice.value = null), 2200);
-    }
+    noteFocusUnavailable();
     return;
   }
 
-  tap();
-  focusRing.value = applied;
-  focusSeq.value++;
-  window.clearTimeout(focusTimer);
-  focusTimer = window.setTimeout(() => (focusRing.value = null), 900);
-
   // Leaving the lens on single-shot freezes it at one distance, which is what
-  // makes a camera feel broken afterwards. Hand it back to continuous.
-  if (mode === "single-shot" && focusModes.includes("continuous")) {
+  // makes a camera feel broken on the next shot. Hand it back to continuous.
+  if (canSingleShot && focusModes.includes("continuous")) {
     window.clearTimeout(focusArmTimer);
     focusArmTimer = window.setTimeout(() => {
       void track
@@ -535,6 +539,14 @@ async function focusAt(clientX: number, clientY: number) {
         .catch(() => undefined);
     }, 1600);
   }
+}
+
+/** One honest line, once, instead of a ring that means nothing. */
+function noteFocusUnavailable() {
+  if (focusNotice.value) return;
+  window.clearTimeout(focusNoticeTimer);
+  focusNotice.value = "This lens focuses by itself";
+  focusNoticeTimer = window.setTimeout(() => (focusNotice.value = null), 2200);
 }
 
 /** Pixel distance between the two fingers currently on the stage. */

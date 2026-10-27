@@ -105,10 +105,13 @@ export function allowCamera() {
  */
 export const fakeCamera = {
   echo: true,
+  /** Every applyConstraints throws: an old browser that knows nothing. */
+  failAll: false,
   caps: {} as Record<string, unknown>,
   applied: [] as unknown[],
   reset() {
     fakeCamera.echo = true;
+    fakeCamera.failAll = false;
     fakeCamera.caps = {};
     fakeCamera.applied = [];
   },
@@ -122,6 +125,11 @@ export function fakeCameraStream() {
     getSettings: () => ({ ...state }),
     applyConstraints: async (constraints?: MediaTrackConstraints) => {
       fakeCamera.applied.push(constraints);
+      if (fakeCamera.failAll) {
+        const err = new Error("unsupported");
+        err.name = "NotSupportedError";
+        throw err;
+      }
       const advanced = (constraints?.advanced ?? []) as Record<string, unknown>[];
       if (fakeCamera.echo) {
         for (const set of advanced) Object.assign(state, set);

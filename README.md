@@ -55,10 +55,12 @@ camera frame — desk, shadow, skew. After is what the export produces with
   crop tool has exactly one button — *Done cropping* — and the page is rendered
   once on the way out, so dragging stays butter-smooth instead of warping a
   photo on every finger lift.
-- **Find the page, and *see* it.** Pressing *Find the page* sweeps the photo
-  while the detector works, then glides the four corners onto what it found — a
-  quarter of a second, and you know exactly what was picked. Nothing found? The
-  frame gives one short nudge and says so.
+- **Find the page, and *see* it.** Pressing *Find the page* runs one amber band
+  from the top of the photo to the bottom — a single pass, never a loop that
+  stops wherever the detector happened to finish — then frames what it found and
+  **stops**. Nothing is created until you choose: *Use this crop* or *Crop it
+  myself*. A search that finds nothing says so and leaves the same three choices
+  on the sheet instead of opening a tool nobody asked for.
 - **One switch, no look-hunting.** *Optimize* is off by default, because the
   photo as taken is the honest starting point; switched on it flattens the
   lighting, whitens the paper and sharpens the text. It then appears in the dock
@@ -79,7 +81,11 @@ camera frame — desk, shadow, skew. After is what the export produces with
 - **Turn, reorder, fix.** A quarter turn lives in the header next to *Crop*;
   pages in the grid drag into another slot by their grip (or move with the arrow
   keys when focused); removing a page is undoable for six seconds.
-- **Tap to focus** in the viewfinder, plus an opt-in *Auto* shutter that fires
+- **Tap to focus.** A tap always answers — ring where the finger was, plus a
+  haptic — and asks the lens to focus there; where a browser cannot honour the
+  point it falls back to a plain refocus, and if the lens cannot be asked at all
+  it says so once instead of flashing a ring that means nothing. Plus an opt-in
+  *Auto* shutter that fires
   once the outline has held still for most of a second — for when the phone is
   propped up and both hands are busy with the book.
 - **Two pages in one photo** (an open book, two receipts): the detector looks

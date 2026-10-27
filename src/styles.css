@@ -955,6 +955,27 @@ img {
   color: var(--muted);
 }
 
+/* The confirm buttons arrive a beat after the outline, so the order on screen is
+   the order of the story: sweep, frame, decide. */
+.choice.reveal {
+  animation: choice-in 0.26s var(--ease) both;
+}
+
+.choice.reveal:nth-of-type(2) {
+  animation-delay: 0.06s;
+}
+
+@keyframes choice-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 .choice {
   display: flex;
   align-items: center;
@@ -1108,53 +1129,18 @@ img {
 .corner-editor {
   position: absolute;
   inset: 0;
+  /* A quarter-second fade on the way in, nothing on the way out: the crop view
+     stays up until the new page is drawn (see EditorView.toggleFrame), so the
+     only visible change is a calm dissolve rather than a jump in size. */
+  animation: corner-in 0.18s var(--ease);
 }
 
-/* "No page edge found": one short nudge, then still. Enough to be felt, not
-   enough to be a show. */
-.corner-editor.missed /* Invisible on purpose: the canvas draws the rings. These exist so a keyboard
-   and a screen reader can reach the four corners at all. */
-.corner-handles {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-}
-
-.corner-handle {
-  position: absolute;
-  width: calc(44px * var(--u));
-  height: calc(44px * var(--u));
-  margin: calc(-22px * var(--u)) 0 0 calc(-22px * var(--u));
-  border-radius: 50%;
-  background: none;
-  border: 0;
-  opacity: 0;
-  pointer-events: none;
-}
-
-.corner-handle:focus-visible {
-  opacity: 1;
-  outline: 2px solid rgba(255, 192, 97, 0.9);
-  outline-offset: calc(9px * var(--u));
-}
-
-.corner-canvas {
-  animation: corner-miss 0.4s var(--ease);
-}
-
-@keyframes corner-miss {
-  0%,
-  100% {
-    transform: translateX(0);
+@keyframes corner-in {
+  from {
+    opacity: 0;
   }
-  20% {
-    transform: translateX(-7px);
-  }
-  45% {
-    transform: translateX(6px);
-  }
-  70% {
-    transform: translateX(-3px);
+  to {
+    opacity: 1;
   }
 }
 
@@ -1182,6 +1168,35 @@ img {
   opacity: 1;
   outline: 2px solid rgba(255, 192, 97, 0.9);
   outline-offset: calc(9px * var(--u));
+}
+
+/*
+ * "No page edge found": one short nudge, then still. Enough to be felt, not
+ * enough to be a show.
+ *
+ * The animation lives on `.missed .corner-canvas`, not on `.corner-canvas`: this
+ * rule used to be an unconditional shake, so the picture visibly wobbled every
+ * single time the crop tool opened — which read as the app being unsteady
+ * exactly when you are trying to place a corner precisely.
+ */
+.corner-editor.missed .corner-canvas {
+  animation: corner-miss 0.4s var(--ease);
+}
+
+@keyframes corner-miss {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  20% {
+    transform: translateX(-7px);
+  }
+  45% {
+    transform: translateX(6px);
+  }
+  70% {
+    transform: translateX(-3px);
+  }
 }
 
 .corner-canvas {
@@ -1270,6 +1285,10 @@ img {
 .crop-done {
   width: 100%;
   height: var(--tap-lg);
+}
+
+.crop-done:disabled {
+  opacity: 0.7;
 }
 
 /* Rotate and Crop travel together: both are corrections to the page, not
