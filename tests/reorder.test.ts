@@ -60,6 +60,11 @@ function firePointer(target: EventTarget, type: string, x: number, y: number, po
   target.dispatchEvent(event);
 }
 
+/** Wait past the landing flight (LAND_MS + the hand-over). */
+const landed = async () => {
+  await tick(340);
+};
+
 const tick = async (ms = 0) => {
   await flushPromises();
   await new Promise((r) => setTimeout(r, ms));
@@ -148,6 +153,9 @@ describe("reordering pages", () => {
     await tick(10);
 
     expect(order()).toEqual([before[1], before[2], before[0]]);
+    expect(wrapper.find(".page-card.dragging").exists()).toBe(true);
+
+    await landed();
     expect(document.querySelector(".drag-ghost")).toBeNull();
     expect(wrapper.find(".page-card.dragging").exists()).toBe(false);
     wrapper.unmount();
@@ -192,7 +200,7 @@ describe("reordering pages", () => {
     expect(document.querySelector(".drag-ghost")).toBeTruthy();
 
     firePointer(window, "pointerup", first.x, first.y);
-    await tick(10);
+    await landed();
     expect(document.querySelector(".drag-ghost")).toBeNull();
     expect(wrapper.findAll(".page-card.dragging").length).toBe(0);
     wrapper.unmount();
@@ -203,7 +211,7 @@ describe("reordering pages", () => {
     await drag(wrapper, 0, 2);
 
     firePointer(window, "pointercancel", 100, 100);
-    await tick(10);
+    await landed();
 
     // nothing stays invisible, and nothing stays armed
     expect(document.querySelector(".drag-ghost")).toBeNull();
@@ -227,6 +235,56 @@ describe("reordering pages", () => {
     expect(document.querySelector(".drag-ghost")).toBeNull();
     firePointer(window, "pointerup", start.x, start.y);
     wrapper.unmount();
+  });
+
+  it("flies the held card into its slot instead of blinking there", async () => {
+    const wrapper = await mountGrid(3);
+    await drag(wrapper, 0, 2);
+    const target = slotCentre(2);
+
+    firePointer(window, "pointerup", target.x, target.y);
+    // one frame later the flight is under way: the preview is still on screen,
+    // heading for the slot, and the card itself is still the gap
+    await tick(40);
+
+    const ghost = document.querySelector<HTMLElement>(".drag-ghost");
+    expect(ghost, "the preview must not vanish at the moment of the drop").toBeTruthy();
+    expect(ghost!.classList.contains("landing")).toBe(true);
+    // it is flying to the slot it landed in: the third card's own rectangle
+    const slot = slotCentre(2);
+    expect(ghost!.style.transform).toContain("translate3d");
+    const heading = ghost!.style.transform.match(/translate3d\(([-\d.]+)px, ([-\d.]+)px/);
+    expect(heading).toBeTruthy();
+    // (140x190 cards: the preview's left/top is the slot's centre minus half)
+    expect(Number(heading![1])).toBeCloseTo(slot.x - 70, 0);
+    expect(wrapper.findAll(".page-card.dragging").length).toBe(1);
+
+    // and only when it has arrived does the real card take over
+    await landed();
+    expect(document.querySelector(".drag-ghost")).toBeNull();
+    expect(wrapper.findAll(".page-card.dragging").length).toBe(0);
+    wrapper.unmount();
+  });
+
+  it("hands over instantly when the phone asks for less motion", async () => {
+    const real = window.matchMedia;
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: (query: string) => ({ matches: query.includes("reduce"), media: query, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, onchange: null, dispatchEvent: () => false }),
+    });
+    try {
+      const wrapper = await mountGrid(3);
+      const target = slotCentre(2);
+      await drag(wrapper, 0, 2);
+      firePointer(window, "pointerup", target.x, target.y);
+      await tick(20);
+      // no flight: the preference wins, and nothing is left hanging either
+      expect(document.querySelector(".drag-ghost")).toBeNull();
+      expect(wrapper.findAll(".page-card.dragging").length).toBe(0);
+      wrapper.unmount();
+    } finally {
+      Object.defineProperty(window, "matchMedia", { configurable: true, value: real });
+    }
   });
 
   it("still moves a page with the arrow keys", async () => {
