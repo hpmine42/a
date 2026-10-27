@@ -55,3 +55,39 @@ export function clampToBox(
     y: Math.max(radius + pad, Math.min(boxH - radius - pad, p.y)),
   };
 }
+
+export type Segment = { x1: number; y1: number; x2: number; y2: number };
+
+/**
+ * The crosshair inside the magnifier.
+ *
+ * Four arms that stop short of the centre, plus a small ring around the exact
+ * pixel: the arms say "look here", the gap and the ring leave the pixel itself
+ * visible — which is the whole point of a loupe when you are deciding whether the
+ * corner is on the paper's edge or one pixel outside it.
+ *
+ * Pure and in screen coordinates on purpose. It used to be drawn *through* the
+ * transform that magnifies the photo, i.e. screen numbers fed into a source-pixel
+ * space, so the crosshair landed far outside the circle and never showed up at
+ * all. Geometry that has to be in one space is worth testing in that space.
+ */
+export function reticle(
+  cx: number,
+  cy: number,
+  radius: number,
+  gap = 7,
+  ring = 4
+): { lines: Segment[]; ring: number } {
+  // the arms start outside the ring, so the ring never sits on top of a line
+  const inner = gap + ring;
+  const outer = Math.max(inner + 6, radius - 6);
+  return {
+    lines: [
+      { x1: cx - outer, y1: cy, x2: cx - inner, y2: cy },
+      { x1: cx + inner, y1: cy, x2: cx + outer, y2: cy },
+      { x1: cx, y1: cy - outer, x2: cx, y2: cy - inner },
+      { x1: cx, y1: cy + inner, x2: cx, y2: cy + outer },
+    ],
+    ring,
+  };
+}

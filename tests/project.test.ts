@@ -142,6 +142,25 @@ describe("dragging a page", () => {
     expect(view).not.toMatch(/setPointerCapture/);
   });
 
+  it("draws the loupe crosshair in screen space, not through the zoom", () => {
+    // The cross used to be drawn after the magnifier's scale transform, so its
+    // screen coordinates were read as source pixels: it landed hundreds of
+    // pixels outside the loupe and was clipped away ("kein Kreuz in der Mitte").
+    const corner = read("src/components/CornerEditor.vue");
+    const loupe = corner.slice(corner.indexOf("function drawLoupe("));
+    const magnify = loupe.indexOf("g.drawImage(img, 0, 0);");
+    const restore = loupe.indexOf("g.restore();", magnify);
+    const crosshair = loupe.indexOf("reticle(centre.x, centre.y, R)");
+    expect(magnify).toBeGreaterThan(0);
+    expect(restore).toBeGreaterThan(magnify);
+    // the crosshair comes after the transform is gone again
+    expect(crosshair).toBeGreaterThan(restore);
+    // and it is drawn twice: a dark halo, then amber, so white paper does not
+    // swallow it
+    expect(loupe).toMatch(/cross\(4\.8, "rgba\(6, 7, 9, 0\.6\)"\)/);
+    expect(loupe).toMatch(/cross\(1\.9, "#ffc061"\)/);
+  });
+
   it("does not tilt the preview and does not fade the card", () => {
     // both read as glitches under the finger, not as feedback
     const ghostStyle = view.slice(view.indexOf("class=\"drag-ghost\""), view.indexOf("drag-ghost-num"));
