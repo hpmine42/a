@@ -48,6 +48,41 @@ if (css) {
   if (!info || info.size < 1000) problems.push(`${css} looks empty`);
 }
 
+/**
+ * The service worker is what makes the app open offline, so the build has to
+ * hand it a complete list. A hand-written list is the classic half-offline app:
+ * the html is cached, the hashed bundle it loads is not, and a phone in flight
+ * mode gets a page that never boots.
+ */
+const sw = await readFile(join(dist, "sw.js"), "utf8").catch(() => "");
+if (!sw) {
+  problems.push("dist/sw.js is missing — the app would never work offline");
+} else {
+  if (/__BUILD__|__PRECACHE__/.test(sw)) {
+    problems.push("dist/sw.js still has build placeholders — it was not stamped");
+  }
+  const match = /const PRECACHE = (\[[\s\S]*?\]);/.exec(sw);
+  const list = match ? JSON.parse(match[1]) : [];
+  const wanted = ["./index.html", entry?.replace(/^\.\//, "./"), css?.split("?")[0]]
+    .filter(Boolean)
+    .map((p) => (p.startsWith("./") ? p : `./${p}`));
+  for (const file of wanted) {
+    if (!list.includes(file)) problems.push(`${file} is not precached — offline launch would fail`);
+  }
+  const worker = list.find((p) => /detect\.worker-.*\.js$/.test(p));
+  if (!worker) problems.push("the capture worker chunk is not precached");
+  for (const wantedAsset of ["manifest.webmanifest", "icon-192.png"]) {
+    if (!list.includes(`./${wantedAsset}`)) problems.push(`${wantedAsset} is not precached`);
+  }
+  // every precached file has to exist: a 404 in the list is a wasted install
+  for (const item of list) {
+    // "./" is the directory itself: the browser answers it with index.html
+    if (item === "./") continue;
+    const info = await stat(join(dist, item.replace(/^\.\//, ""))).catch(() => null);
+    if (!info?.isFile()) problems.push(`${item} is precached but not in dist/`);
+  }
+}
+
 if (problems.length) {
   console.error("dist check failed:");
   for (const p of problems) console.error("  - " + p);
