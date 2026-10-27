@@ -119,9 +119,9 @@ onBeforeUnmount(() => {
   window.clearTimeout(undoTimer);
   window.clearTimeout(resultTimer);
   // leaving mid-drag must not leave the auto-scroll loop (or the preview) alive
-  window.clearTimeout(settleTimer);
   if (scrollRaf) cancelAnimationFrame(scrollRaf);
   scrollRaf = 0;
+  listen(false);
   drag = null;
   ghost.value = null;
   draggingId.value = null;
@@ -281,9 +281,6 @@ const ghost = ref<{
 const dragNum = computed(() => scan.pages.findIndex((p) => p.id === draggingId.value) + 1);
 /** Spoken, not shown: where a keyboard move just put the page. */
 const moveNote = ref("");
-/** Set for a moment after a drop, so the card settles instead of popping. */
-const settled = ref<number | null>(null);
-let settleTimer = 0;
 
 /**
  * What a drag remembers.
@@ -295,6 +292,8 @@ let settleTimer = 0;
  */
 type Drag = {
   id: number;
+  /** Only this pointer drives the drag. */
+  pointerId: number;
   /** Offset of the finger inside the card, so the preview does not jump. */
   grabX: number;
   grabY: number;
@@ -426,6 +425,30 @@ function keyMove(index: number, delta: number): void {
   moveNote.value = `Page moved to position ${target + 1} of ${scan.pages.length}`;
 }
 
+/**
+ * Where the drag listens.
+ *
+ * Not on the grip. The moment the order changes, Vue moves the card's DOM node
+ * to its new slot — and moving a node releases pointer capture, which the
+ * browser reports as a cancel. That is the "it hangs as soon as the others
+ * shuffle and you cannot drag any more": the capture died with the move. So the
+ * page listens on `window`, which no reorder can take away.
+ */
+function listen(on: boolean): void {
+  if (on) {
+    window.addEventListener("pointermove", onDragMove as EventListener, { passive: false });
+    window.addEventListener("pointerup", onDragEnd);
+    window.addEventListener("pointercancel", onDragEnd);
+    // a phone call, a notification shade, a backgrounded app: the finger is gone
+    window.addEventListener("blur", onDragEnd);
+  } else {
+    window.removeEventListener("pointermove", onDragMove as EventListener);
+    window.removeEventListener("pointerup", onDragEnd);
+    window.removeEventListener("pointercancel", onDragEnd);
+    window.removeEventListener("blur", onDragEnd);
+  }
+}
+
 function onGripDown(event: PointerEvent, id: number) {
   if (busy.value) return;
   const card = (event.currentTarget as HTMLElement).closest<HTMLElement>(".page-card");
@@ -433,6 +456,7 @@ function onGripDown(event: PointerEvent, id: number) {
   tap();
   drag = {
     id,
+    pointerId: event.pointerId,
     grabX: rect ? event.clientX - rect.left : 0,
     grabY: rect ? event.clientY - rect.top : 0,
     downX: event.clientX,
@@ -444,50 +468,47 @@ function onGripDown(event: PointerEvent, id: number) {
     lifted: false,
   };
   pointer = { x: event.clientX, y: event.clientY };
-  draggingId.value = id;
-  try {
-    (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
-  } catch {
-    /* capture is a nicety; the drag works without it */
-  }
+  // Deliberately *not* hiding the card yet: until the finger has travelled far
+  // enough, this is still a tap, and a card that blanks under the finger for a
+  // frame reads as a flicker.
+  listen(true);
   event.preventDefault();
 }
 
-function onGripMove(event: PointerEvent) {
+function onDragMove(event: PointerEvent) {
   if (!drag) return;
+  // a second finger is not a second drag
+  if (event.pointerId !== drag.pointerId) return;
   pointer = { x: event.clientX, y: event.clientY };
   if (!drag.lifted) {
     if (Math.hypot(event.clientX - drag.downX, event.clientY - drag.downY) < LIFT_SLOP) return;
     drag.lifted = true;
     thump();
+    // hide the card and show the preview in the same tick, so there is never a
+    // frame where the page has simply vanished
+    draggingId.value = drag.id;
     if (!scrollRaf) scrollRaf = requestAnimationFrame(autoScroll);
   }
   paintGhost(event.clientX, event.clientY);
   aim();
-  event.preventDefault();
+  if (event.cancelable) event.preventDefault();
 }
 
-function onGripUp(event: PointerEvent) {
-  const id = drag?.id ?? null;
-  const lifted = drag?.lifted ?? false;
+/** Pointer up, cancel, or the window losing focus: all three end the drag. */
+function onDragEnd() {
+  if (!drag) return;
+  const lifted = drag.lifted;
   drag = null;
   ghost.value = null;
   draggingId.value = null;
+  listen(false);
   if (scrollRaf) {
     cancelAnimationFrame(scrollRaf);
     scrollRaf = 0;
   }
-  try {
-    (event.currentTarget as HTMLElement).releasePointerCapture(event.pointerId);
-  } catch {
-    /* capture may already be gone */
-  }
-  if (id === null || !lifted) return;
-  // The order is already what the finger chose; this is only the landing.
+  if (!lifted) return;
+  // The order is already what the finger chose; there is nothing to apply here.
   thump();
-  settled.value = id;
-  window.clearTimeout(settleTimer);
-  settleTimer = window.setTimeout(() => (settled.value = null), 180);
 }
 </script>
 
@@ -520,10 +541,7 @@ function onGripUp(event: PointerEvent) {
         v-for="(page, i) in scan.pages"
         :key="page.id"
         class="page-card"
-        :class="{
-          dragging: draggingId === page.id,
-          settled: settled === page.id,
-        }"
+        :class="{ dragging: draggingId === page.id }"
       >
         <button class="page-thumb" :aria-label="`Edit page ${i + 1}`" @click="emit('edit', page.id)">
           <img v-if="page.thumb" :src="page.thumb" alt="" />
@@ -533,9 +551,6 @@ function onGripUp(event: PointerEvent) {
           class="page-grip"
           :aria-label="`Reorder page ${i + 1}: drag, or use the arrow keys to move it`"
           @pointerdown="onGripDown($event, page.id)"
-          @pointermove="onGripMove"
-          @pointerup="onGripUp"
-          @pointercancel="onGripUp"
           @keydown.left.prevent="keyMove(i, -1)"
           @keydown.up.prevent="keyMove(i, -1)"
           @keydown.right.prevent="keyMove(i, 1)"
@@ -564,7 +579,7 @@ function onGripUp(event: PointerEvent) {
         :style="{
           width: `${ghost.w}px`,
           height: `${ghost.h}px`,
-          transform: `translate3d(${ghost.x}px, ${ghost.y}px, 0) rotate(-1.4deg) scale(1.045)`,
+          transform: `translate3d(${ghost.x}px, ${ghost.y}px, 0)`,
         }"
       >
         <img v-if="ghost.thumb" :src="ghost.thumb" alt="" />

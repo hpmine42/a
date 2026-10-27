@@ -121,11 +121,32 @@ describe("dragging a page", () => {
     // the order changes during the drag, not on drop
     expect(view).toMatch(/function aim\(\)/);
     expect(view).toMatch(/movePage\(current, target\)/);
-    expect(view).toMatch(/@pointermove="onGripMove"/);
+    expect(view).toMatch(/@pointerdown="onGripDown\(\$event, page\.id\)"/);
     // and the card under the finger is drawn as a floating preview
     expect(view).toMatch(/<Teleport to="body">/);
     expect(view).toMatch(/class="drag-ghost"/);
     expect(view).toMatch(/<TransitionGroup name="card"/);
+  });
+
+  it("listens on the page, not on the card that is about to move", () => {
+    // Moving a DOM node releases pointer capture: with the handlers on the grip,
+    // the drag died the moment the grid rearranged ("bleibt einfach hängen").
+    expect(view).toMatch(/window\.addEventListener\("pointermove"/);
+    expect(view).toMatch(/window\.addEventListener\("pointerup"/);
+    expect(view).toMatch(/window\.addEventListener\("pointercancel"/);
+    expect(view).not.toMatch(/setPointerCapture/);
+  });
+
+  it("does not tilt the preview and does not fade the card", () => {
+    // both read as glitches under the finger, not as feedback
+    const ghostStyle = view.slice(view.indexOf("class=\"drag-ghost\""), view.indexOf("drag-ghost-num"));
+    expect(ghostStyle).not.toMatch(/rotate\(/);
+    expect(ghostStyle).toMatch(/translate3d/);
+    expect(css).not.toMatch(/\.page-card\.settled/);
+    expect(css).not.toMatch(/@keyframes card-settle/);
+    // no transition on the card, so nothing can fade on its way to the gap
+    const card = css.slice(css.indexOf("\n.page-card {"), css.indexOf("\n.page-card {") + 120);
+    expect(card).not.toMatch(/transition:.*opacity/);
   });
 
   it("leaves a gap where the page will land instead of a marker line", () => {
