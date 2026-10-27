@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   clampToBox,
   containFit,
+  coverPoint,
   loupeSourceRect,
   reticle,
   toCanvasPoint,
@@ -138,5 +139,59 @@ describe("reticle", () => {
     const large = reticle(0, 0, 90);
     const reach = (r: ReturnType<typeof reticle>) => Math.max(...r.lines.map((l) => Math.abs(l.x2)));
     expect(reach(large)).toBeGreaterThan(reach(small));
+  });
+});
+
+
+describe("coverPoint", () => {
+  // a landscape 1280x960 frame filling a tall 390x620 stage with object-fit: cover
+  const MAP = (() => {
+    const scale = Math.max(390 / 1280, 620 / 960);
+    return { scale, dx: (390 - 1280 * scale) / 2, dy: (620 - 960 * scale) / 2, w: 390, h: 620 };
+  })();
+  const FRAME = { w: 1280, h: 960 };
+
+  it("puts the middle of the stage in the middle of the frame", () => {
+    const p = coverPoint({ x: 195, y: 310 }, MAP, FRAME);
+    expect(p.x).toBeCloseTo(0.5, 6);
+    expect(p.y).toBeCloseTo(0.5, 6);
+  });
+
+  it("maps a tap without the preview zoom the way it always did", () => {
+    // the frame is wider than the stage, so the drawn image starts off to the left
+    const p = coverPoint({ x: 0, y: 310 }, MAP, FRAME);
+    expect(p.x).toBeCloseTo((0 - MAP.dx) / (1280 * MAP.scale), 6);
+    expect(p.y).toBeCloseTo(0.5, 6);
+  });
+
+  it("follows the picture when the preview itself is scaled up", () => {
+    // a lens with no hardware zoom: the preview layer is CSS-scaled 2x, so the
+    // stage edge shows a point further out in the frame, not the same one
+    const plain = coverPoint({ x: 0, y: 310 }, MAP, FRAME, 1);
+    const zoomed = coverPoint({ x: 0, y: 310 }, MAP, FRAME, 2);
+    expect(zoomed.x).toBeGreaterThan(plain.x);
+    // the visible strip is the middle half of the frame, so the stage's left edge
+    // lands a quarter of the way in from where it does unzoomed
+    const layer = 1280 * MAP.scale;
+    expect(zoomed.x).toBeCloseTo((195 - 195 / 2 - MAP.dx) / layer, 6);
+    // and the centre still means the centre
+    const centre = coverPoint({ x: 195, y: 310 }, MAP, FRAME, 2);
+    expect(centre.x).toBeCloseTo(0.5, 6);
+  });
+
+  it("keeps the zoomed span inside the frame, whatever the factor", () => {
+    for (const zoom of [1, 1.7, 3, 8]) {
+      for (const x of [-200, 0, 195, 390, 900]) {
+        const p = coverPoint({ x, y: 310 }, MAP, FRAME, zoom);
+        expect(p.x).toBeGreaterThanOrEqual(0);
+        expect(p.x).toBeLessThanOrEqual(1);
+      }
+    }
+  });
+
+  it("survives a nonsense factor instead of producing NaN", () => {
+    const p = coverPoint({ x: 195, y: 310 }, MAP, FRAME, 0);
+    expect(Number.isFinite(p.x)).toBe(true);
+    expect(p.x).toBeCloseTo(0.5, 6);
   });
 });

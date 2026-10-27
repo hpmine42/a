@@ -235,20 +235,44 @@ export async function processPage(page: Page, opts: ProcessOptions = {}): Promis
 }
 
 /**
+ * One finished page, rendered at a given size — *without* touching the preview.
+ *
+ * Warp, straighten, flatten: exactly what `processPage` leaves in `page.result`,
+ * but as a plain return value. That distinction matters for anything that needs
+ * the page at a size the screen does not: the copy is the caller's, and the page
+ * on screen keeps the render it was sharpened for.
+ */
+function renderCopy(page: Page, maxSide: number): ImageData {
+  const quad = cropQuad(page);
+  const size = outputSize(quad, maxSide);
+  const warped = warp(page.src, quad, size.w, size.h);
+  const upright = rotateImageData(warped, page.rotation / 90);
+  return page.opts.optimize
+    ? enhance(upright, { mode: "bw", brightness: 0, contrast: 0, strength: 58 })
+    : upright;
+}
+
+/**
  * Read the words on a page.
  *
  * The engine gets a *finished* page: warped, upright, and flattened first if
  * Optimize is on — that is the input it was tuned for. The result is kept on the
  * page, so exporting, reopening and reloading never repeat the work.
+ *
+ * The page the engine reads is a *copy* at the engine's size (1800px). It used to
+ * be produced by rendering the page itself at 1800, which quietly replaced the
+ * preview with a smaller one: on a phone nobody could tell, but on a tablet or a
+ * desktop the page went visibly soft the moment you asked for its text — and
+ * stayed that way, because the editor still believed it was showing the larger
+ * render.
  */
 export async function readPageText(
   page: Page,
   onProgress?: (p: OcrProgress) => void
 ): Promise<OcrPage> {
   await ensureSource(page);
-  await processPage(page, { full: true, maxSide: OCR_SIDE });
-  const result = page.result;
-  if (!result) throw new OcrError("empty");
+  const result = renderCopy(page, OCR_SIDE);
+  if (result.width < 8 || result.height < 8) throw new OcrError("empty");
   const blob = await canvasToBlob(imageDataToCanvas(result));
   if (!blob) throw new OcrError("empty");
   const text = await recognize(blob, { width: result.width, height: result.height }, onProgress);

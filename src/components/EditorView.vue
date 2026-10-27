@@ -51,8 +51,32 @@ function hideBusy() {
   busy.value = false;
 }
 
-/** Breathing room around the page, in CSS pixels — must match .editor-stage. */
-const STAGE_PAD = 26;
+/**
+ * The area the page may actually occupy: the stage minus its own padding.
+ *
+ * The breathing room is in the stylesheet — `.editor-stage` pads `20px * --u` on
+ * every side, and that padding grows with the viewport boost. A constant here
+ * said "26 in total", which is neither one side nor two: the page was rendered
+ * into its own margin on every phone, and on a browser that needed the boost the
+ * sheet came out wider than the stage's content box and had its edges clipped by
+ * `overflow: hidden`. Measuring it costs one `getComputedStyle` per draw and
+ * cannot drift away from the stylesheet again.
+ */
+function pageBox(): { w: number; h: number } | null {
+  const host = stage.value;
+  if (!host) return null;
+  const rect = host.getBoundingClientRect();
+  if (!rect.width || !rect.height) return null;
+  const style = window.getComputedStyle ? window.getComputedStyle(host) : null;
+  const pad = (side: "paddingLeft" | "paddingRight" | "paddingTop" | "paddingBottom") => {
+    const value = parseFloat(style?.[side] ?? "");
+    return Number.isFinite(value) ? value : 0;
+  };
+  return {
+    w: Math.max(40, rect.width - pad("paddingLeft") - pad("paddingRight")),
+    h: Math.max(40, rect.height - pad("paddingTop") - pad("paddingBottom")),
+  };
+}
 
 const page = computed(() => activePage());
 const mode = ref<"result" | "frame">(props.initialMode);
@@ -223,16 +247,10 @@ function drawResult() {
   const current = page.value;
   if (!el || !host || !current?.result) return;
   const img = current.result;
-  const rect = host.getBoundingClientRect();
-  const pad = STAGE_PAD;
-  if (!rect.width || !rect.height) return;
+  const box = pageBox();
+  if (!box) return;
 
-  const fit = containFit(
-    img.width,
-    img.height,
-    Math.max(40, rect.width - pad),
-    Math.max(40, rect.height - pad)
-  );
+  const fit = containFit(img.width, img.height, box.w, box.h);
   const cssW = Math.max(1, Math.round(img.width * fit.scale));
   const cssH = Math.max(1, Math.round(img.height * fit.scale));
   // 2x is plenty for a page that is never wider than the screen; 3x triples
@@ -276,18 +294,14 @@ function queueDraw() {
  * pixel count, every glyph lands on the screen 1:1.
  */
 function neededSide(): number {
-  const host = stage.value;
   const current = page.value;
-  if (!host) return PREVIEW_MAX;
-  const rect = host.getBoundingClientRect();
-  if (!rect.width || !rect.height) return PREVIEW_MAX;
+  const box = pageBox();
+  if (!box) return PREVIEW_MAX;
 
   const page0 = current
     ? outputSize(insetQuad(current.quad, EDGE_INSET), 10000)
     : { w: 3, h: 4 };
-  const boxW = Math.max(40, rect.width - STAGE_PAD);
-  const boxH = Math.max(40, rect.height - STAGE_PAD);
-  const cssLong = Math.max(page0.w, page0.h) * Math.min(boxW / page0.w, boxH / page0.h);
+  const cssLong = Math.max(page0.w, page0.h) * Math.min(box.w / page0.w, box.h / page0.h);
   const dpr = Math.min(2, window.devicePixelRatio || 1);
   const natural = current ? naturalSide(current) : PREVIEW_MAX;
   /* Thresholded text is pure black and white, and a canvas that has to shrink

@@ -127,11 +127,14 @@ describe("the words on a page", () => {
     await tick(600);
 
     expect(fake.calls.length).toBe(1);
-    // it read the *finished* page, not the photo and not the small preview —
+    // it read the *finished* page, not the photo and not a squashed thumbnail —
     // the stub photo is tiny, so the size is the page's own (see the guard in
     // project.test.ts for the real 1800px budget)
-    const rendered = scan.pages[0].result!;
-    expect(fake.calls[0]).toEqual({ width: rendered.width, height: rendered.height });
+    const page0 = scan.pages[0];
+    expect(fake.calls[0]).toEqual({
+      width: page0.result!.width,
+      height: page0.result!.height,
+    });
     const page = scan.pages[0];
     expect(page.ocr?.words.length).toBe(3);
     expect(page.ocr?.text).toContain("INVOICE 240801");
@@ -141,6 +144,30 @@ describe("the words on a page", () => {
     expect(sheet()).toBeTruthy();
     const body = document.querySelector<HTMLTextAreaElement>(".text-body")!;
     expect(body.value).toContain("TOTAL DUE");
+    wrapper.unmount();
+  });
+
+  it("keeps the page on screen exactly as sharp as it was", async () => {
+    const wrapper = mount(App);
+    await tick(20);
+    await finishedPage(wrapper);
+    const page = scan.pages[0];
+    const preview = page.result!;
+    const cacheKey = page.cacheKey;
+    const warpedSide = page.warpedSide;
+
+    await wrapper.find("button.text-open").trigger("click");
+    await tick(600);
+
+    // The engine reads a *copy* at its own size. Reading the words used to mean
+    // rendering the page itself at 1800px, which replaced the preview with a
+    // smaller one: on a phone nobody noticed, on a tablet the page went soft the
+    // moment you asked for its text and nothing rendered it again.
+    expect(fake.calls.length).toBe(1);
+    expect(page.result).toBe(preview);
+    expect(page.cacheKey).toBe(cacheKey);
+    expect(page.warpedSide).toBe(warpedSide);
+    expect(page.ocr?.words.length).toBe(3);
     wrapper.unmount();
   });
 
