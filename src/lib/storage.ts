@@ -12,6 +12,7 @@
  */
 
 import type { Quad } from "./cv";
+import type { OcrPage } from "./ocr";
 
 export type StoredPage = {
   id: number;
@@ -26,6 +27,10 @@ export type StoredPage = {
   thumb: string | null;
   /** The source photo, JPEG. Null only if the browser refused to encode it. */
   src: Blob | null;
+  /** The words on the page, once somebody asked for them (see lib/ocr). */
+  text?: OcrPage | null;
+  /** Whether those words are written into the PDF as a text layer. */
+  textLayer?: boolean;
 };
 
 export type StoredMeta = {

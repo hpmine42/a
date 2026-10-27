@@ -10,7 +10,16 @@ import vue from "@vitejs/plugin-vue";
  * link-preview image that no launch ever fetches, and the wide sample is the
  * second demo photo — the one the "try a sample" button uses is kept.
  */
-const NOT_PRECACHED = [/^sw\.js$/, /^social\.png$/, /^samples\/letter-scan\.jpg$/];
+const NOT_PRECACHED = [
+  /^sw\.js$/,
+  /^social\.png$/,
+  /^samples\/letter-scan\.jpg$/,
+  // Text recognition is ~10 MB of WASM and a language model. Nothing else needs
+  // it, and a phone should not spend that much data on a feature it may never
+  // open: it is fetched the first time somebody taps "Find the text", and the
+  // runtime cache keeps it from then on.
+  /^ocr\//,
+];
 
 /** Every file in `dir`, as "./path" entries relative to the site root. */
 function precacheFiles(dir: string, prefix = ""): string[] {

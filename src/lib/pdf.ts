@@ -1,6 +1,7 @@
 import type { jsPDF as JsPdf } from "jspdf";
 import { enhance, outputSize, warp } from "./cv";
 import { imageDataToCanvas, nextFrame, rotateImageData, slug } from "./image";
+import type { OcrPage } from "./ocr";
 import { cropQuad, EXPORT_MAX, ensureSource, naturalSide, type Page } from "./store";
 
 export type PageFormat = "a4" | "letter" | "fit";
@@ -49,6 +50,72 @@ export function fitOnPage(
     orientation: landscape ? "landscape" : "portrait",
     size,
   };
+}
+
+/**
+ * Where one recognised word goes on the page, and how big it has to be drawn.
+ *
+ * Pure, and tested separately from jsPDF: the whole point of a text layer is that
+ * selecting a word in a PDF reader highlights *that word*, so the placement maths
+ * is the feature, not an implementation detail.
+ *
+ * `size` is in points (that is what a font size is), `scale` is a horizontal
+ * stretch factor — a word recognised on a page photographed at an angle is not
+ * the width the font would draw it at, and stretching it is what makes the
+ * highlight sit on the ink.
+ */
+export type TextRun = { text: string; x: number; y: number; size: number; scale: number };
+
+/** 1pt in millimetres — the pages are laid out in mm. */
+const PT_TO_MM = 25.4 / 72;
+
+export function textLayerRuns(
+  ocr: OcrPage,
+  place: { x: number; y: number; width: number; height: number },
+  measure: (text: string, sizePt: number) => number
+): TextRun[] {
+  const runs: TextRun[] = [];
+  /**
+   * A word box is the ink: cap height plus descenders, i.e. roughly 0.78 of the
+   * font size (Helvetica's cap height is 0.72em, a descender adds ~0.21, and the
+   * box is the union of the two). Dividing by that turns a box height into the
+   * font size a reader would draw it at — close enough that the selection band
+   * covers the ink instead of hanging under or above it.
+   */
+  const inkToSize = (hMm: number) => hMm / 0.78 / PT_TO_MM;
+  /** The middle of the page's word heights: a merged box must not become 3x type. */
+  const sizes = ocr.words
+    .filter((word) => word.text.trim() && word.box[3] > word.box[1])
+    .map((word) => inkToSize((word.box[3] - word.box[1]) * place.height))
+    .sort((a, b) => a - b);
+  const median = sizes.length ? sizes[Math.floor(sizes.length / 2)] : 0;
+  for (const word of ocr.words) {
+    const text = word.text.trim();
+    if (!text) continue;
+    const [l, t, r, b] = word.box;
+    const w = (r - l) * place.width;
+    const h = (b - t) * place.height;
+    if (w <= 0.2 || h <= 0.2) continue;
+    let size = inkToSize(h);
+    if (median) size = Math.max(median * 0.45, Math.min(median * 1.7, size));
+    size = Math.max(1.2, Math.min(60, size));
+    const natural = measure(text, size);
+    const scale = natural > 0.05 ? Math.max(0.2, Math.min(6, w / natural)) : 1;
+    runs.push({
+      text,
+      x: place.x + l * place.width,
+      // the box bottom is the ink's bottom; the baseline sits just above it
+      y: place.y + (t + b) / 2 * place.height + (size * PT_TO_MM) * 0.34,
+      size,
+      scale,
+    });
+  }
+  return runs;
+}
+
+/** Does this page carry words worth writing into the PDF? */
+export function hasTextLayer(page: Page): boolean {
+  return Boolean(page.textLayer && page.ocr && page.ocr.words.length);
 }
 
 /**
@@ -347,6 +414,30 @@ export async function buildPdf(
     }
 
     doc.addImage(jpeg, "JPEG", place.x, place.y, place.width, place.height, undefined, "SLOW");
+
+    /**
+     * The invisible text layer.
+     *
+     * Drawn word by word, in the place the word was found, in invisible render
+     * mode: the page still looks exactly like the scan, but the PDF can be
+     * searched, selected and copied — and a copy-paste gives back the document,
+     * not a screenshot of it. Nothing here changes the image, so a page without
+     * recognised text exports exactly as before.
+     */
+    if (page.ocr && hasTextLayer(page)) {
+      const measure = (text: string, sizePt: number) =>
+        (doc!.getStringUnitWidth(text) * sizePt) / doc!.internal.scaleFactor;
+      doc.setFont("helvetica", "normal");
+      for (const run of textLayerRuns(page.ocr, place, measure)) {
+        doc.setFontSize(run.size);
+        doc.text(run.text, run.x, run.y, {
+          renderingMode: "invisible",
+          horizontalScale: run.scale,
+        });
+      }
+      // jsPDF writes the render mode into every text call (and each one after
+      // this sets it back to `fill`), so nothing can leak into the next page
+    }
   }
 
   onProgress?.(pages.length, pages.length);

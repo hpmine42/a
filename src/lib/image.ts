@@ -131,6 +131,28 @@ export function slug(input: string): string {
   );
 }
 
+/**
+ * A canvas as a JPEG blob.
+ *
+ * The OCR engine reads a file, and a JPEG of a scanned page is a tenth of the
+ * PNG it would otherwise encode — which matters when the whole thing is handed
+ * to a worker on a phone.
+ */
+export async function canvasToBlob(
+  canvas: HTMLCanvasElement,
+  type = "image/jpeg",
+  quality = 0.94
+): Promise<Blob | null> {
+  if (typeof canvas.toBlob !== "function") return null;
+  return new Promise<Blob | null>((resolve) => {
+    try {
+      canvas.toBlob((blob) => resolve(blob), type, quality);
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
 const canvasCache = new WeakMap<ImageData, HTMLCanvasElement>();
 
 /** Cache one canvas per ImageData so redraws stay cheap. */

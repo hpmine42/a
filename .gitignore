@@ -3,3 +3,7 @@ dist/
 .tmp/
 .DS_Store
 *.local
+
+# The text-recognition engine (~10 MB: WASM + the English model) is fetched by
+# `npm run ocr:assets` / the prebuild hook, not committed. See that script.
+public/ocr/

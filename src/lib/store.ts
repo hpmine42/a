@@ -11,11 +11,13 @@ import {
 } from "./cv";
 import {
   bitmapToImageData,
+  canvasToBlob,
   imageDataToCanvas,
   makeThumb,
   nextFrame,
   rotateImageData,
 } from "./image";
+import { OcrError, recognize, type OcrPage, type OcrProgress } from "./ocr";
 import { projectStore, type StoredMeta, type StoredPage } from "./storage";
 
 /**
@@ -57,6 +59,15 @@ export type Page = {
    * runs to the paper's edge loses its first letters.
    */
   whole: boolean;
+  /**
+   * The words on this page, if anybody has asked for them. Kept on the page so
+   * the export can lay an invisible text layer under the image — a scan that can
+   * be searched and copied is the difference between a picture of a document and
+   * a document.
+   */
+  ocr: OcrPage | null;
+  /** Whether that text goes into the PDF. Off means the PDF is images only. */
+  textLayer: boolean;
 };
 
 /**
@@ -68,6 +79,15 @@ export const PREVIEW_MAX = 2400;
 /** The first look after a shot: sharp on screen, cheap enough to feel instant. */
 export const FIRST_RENDER = 1400;
 export const EXPORT_MAX = 3000;
+/**
+ * The size the text engine reads at.
+ *
+ * Not the preview (900 is too small: letters merge and the result is fiction)
+ * and not the export size either — measured on a phone photo of an A4 sheet,
+ * 1800px reads every word of a clean page and is the last step before accuracy
+ * stops improving and the wait just grows.
+ */
+export const OCR_SIDE = 1800;
 
 export const scan = reactive({
   pages: [] as Page[],
@@ -134,6 +154,8 @@ export function addPage(src: ImageData, name = "scan"): Page {
     thumb: null,
     opts: defaultOpts(),
     whole: false,
+    ocr: null,
+    textLayer: true,
   };
   scan.pages.push(page);
   scan.activeId = page.id;
@@ -212,6 +234,36 @@ export async function processPage(page: Page, opts: ProcessOptions = {}): Promis
   if (full) page.thumb = makeThumb(page.result);
 }
 
+/**
+ * Read the words on a page.
+ *
+ * The engine gets a *finished* page: warped, upright, and flattened first if
+ * Optimize is on — that is the input it was tuned for. The result is kept on the
+ * page, so exporting, reopening and reloading never repeat the work.
+ */
+export async function readPageText(
+  page: Page,
+  onProgress?: (p: OcrProgress) => void
+): Promise<OcrPage> {
+  await ensureSource(page);
+  await processPage(page, { full: true, maxSide: OCR_SIDE });
+  const result = page.result;
+  if (!result) throw new OcrError("empty");
+  const blob = await canvasToBlob(imageDataToCanvas(result));
+  if (!blob) throw new OcrError("empty");
+  const text = await recognize(blob, { width: result.width, height: result.height }, onProgress);
+  page.ocr = text;
+  scheduleSave(page);
+  return text;
+}
+
+/** Throw the words away (the crop or the orientation changed under them). */
+export function forgetText(page: Page): void {
+  if (!page.ocr) return;
+  page.ocr = null;
+  scheduleSave(page);
+}
+
 /** Flip Optimize and re-render at the current preview resolution. */
 export function toggleOptimize(page: Page): void {
   page.opts.optimize = !page.opts.optimize;
@@ -220,6 +272,8 @@ export function toggleOptimize(page: Page): void {
 /** Turn the page a quarter turn clockwise. */
 export function rotatePage(page: Page): void {
   page.rotation = (page.rotation + 90) % 360;
+  // the words were found in the old orientation: their boxes no longer line up
+  page.ocr = null;
   // a quarter turn does not crop anything: "whole" survives it
   // The warp is unchanged, so only the look cache has to go.
   page.result = null;
@@ -380,6 +434,10 @@ export async function flushSave(): Promise<void> {
         optimize: page.opts.optimize,
         thumb: page.thumb,
         src,
+        // the words are small (a page of text is a few kB) and they are what
+        // makes the text layer survive a reload
+        text: page.ocr,
+        textLayer: page.textLayer,
       };
       await store.writePage(record);
     }
@@ -458,6 +516,8 @@ export async function restoreProject(): Promise<number> {
       cacheKey: "",
       thumb: record.thumb,
       opts: { optimize: Boolean(record.optimize) },
+      ocr: record.text ? { ...record.text, at: record.text.at ?? 0 } : null,
+      textLayer: record.textLayer !== false,
     };
     return page;
   });

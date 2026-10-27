@@ -118,6 +118,32 @@ const meanLuma = (img: ImageData) => {
 };
 const paper = meanLuma(bw);
 check("B&W paper is actually white", paper > 205, `mean luma ${paper.toFixed(0)}`);
+
+/**
+ * Soft coverage, not a stamp.
+ *
+ * A threshold makes every glyph solid black — which is what turned "rn" into "m"
+ * and made the scans look like a 1995 photocopier. A scan of printed text has
+ * grey pixels along every edge, so a healthy page has a visible band of them.
+ * If they ever disappear, the pipeline went back to stamping.
+ */
+const softness = (img: ImageData) => {
+  let mid = 0;
+  let inked = 0;
+  for (let i = 0; i < img.data.length; i += 4) {
+    const v = img.data[i];
+    // "inked" = anything that is not paper; "mid" = the antialiased rim of it
+    if (v < 210) inked++;
+    if (v > 60 && v < 195) mid++;
+  }
+  return inked ? mid / inked : 0;
+};
+const soft = softness(bw);
+check(
+  "letter edges keep their grey",
+  soft > 0.2,
+  `${(soft * 100).toFixed(0)}% of the ink is mid-tone`
+);
 check("colour renders", colour.width === warped.width, `${colour.width}×${colour.height}`);
 
 // Keep the visual artefacts around for manual eyeballing; CI ignores them.
