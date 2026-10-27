@@ -125,11 +125,21 @@ camera frame — desk, shadow, skew. After is what the export produces with
   not at the moment of export, because a lazy chunk that was never fetched is
   exactly what makes "save" fail on a phone that has gone offline since.
   Data Saver and 2G links skip that warm-up.
-- **Installable** — a real PWA with an offline shell. Add it to the home screen
-  and it keeps working with no network at all. The service worker's cache name
-  is stamped with the build (`vite.config.ts`), so a deploy throws the old shell
-  away instead of serving it forever, and its runtime cache is capped at 60
-  entries so hashed bundles cannot accumulate.
+- **Installable, and offline from the first visit.** Add it to the home screen
+  and it opens with no network at all — the worker precaches *every file of the
+  build*, and the list is written by the build (`vite.config.ts` walks `dist/`)
+  rather than by hand. That is the whole difference between an app that works
+  offline and one that only looks like it: a hand-kept list holds `index.html`
+  while the hashed bundle it loads is missing, so a phone in flight mode gets a
+  page that never boots — and the names change on every deploy anyway.
+  With `navigator.onLine === false` the cache answers straight away (no waiting
+  out a timeout to discover the obvious); with a connection the network wins, and
+  only a slow one is cut off after 2.5 s and answered from the cache. If the
+  install itself happens offline, the worker *fails* on purpose and the previous
+  build keeps serving — a new worker must never delete the cache that works.
+  The cache name is stamped with the build, so a deploy throws the old shell
+  away, and the runtime cache is capped at 60 entries so hashed bundles cannot
+  accumulate.
 
 ## Mobile first
 
@@ -268,6 +278,14 @@ scripts/          test-cv.ts (real pipeline), check-dist.mjs (deploy guard)
 Nothing in `src/lib` touches the network. The service worker only caches the
 app's own files, which is why "works offline" is a property and not a promise.
 The only thing that leaves the device is a PDF the user explicitly shares.
+
+Offline is covered by `tests/offline.test.ts`, which runs the real `public/sw.js`
+in a sandbox with a cache, a switchable network and the events a browser fires at
+it: a cold launch with no connection, a launch on a network that accepts the
+request and never answers, a launch with nothing cached at all (a real page, not
+an error), an install that happens offline, and the deploy that must throw the
+previous build away. `scripts/check-dist.mjs` then fails the build if the stamped
+worker does not carry every bundle `index.html` needs.
 
 ## Tests
 

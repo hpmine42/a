@@ -265,15 +265,43 @@ describe("web app manifest", () => {
 
 describe("service worker", () => {
   const sw = read("public/sw.js");
+  const config = read("vite.config.ts");
+  const main = read("src/main.ts");
 
-  it("precaches the shell, so a cold launch is never an error page", () => {
-    expect(sw).toMatch(/const SHELL = \[/);
-    expect(sw).toMatch(/cache\.add\(abs\(path\)\)/);
+  it("precaches the whole build, and the build writes the list", () => {
+    // A hand-written list is the classic half-offline app: `./` is cached, the
+    // hashed bundle it loads is not, and a phone in flight mode gets a page that
+    // never boots. The list is generated from dist/ instead.
+    expect(sw).toMatch(/const PRECACHE = __PRECACHE__;/);
+    expect(sw).not.toMatch(/const SHELL = \[/);
+    expect(sw).toMatch(/PRECACHE\.map\(\(path\) => cache\.add\(abs\(path\)\)\)/);
+    expect(config).toMatch(/function precacheFiles\(/);
+    expect(config).toMatch(/\.replace\("__PRECACHE__"/);
+    expect(config).toMatch(/readdirSync/); // walking dist/, not a literal list
+  });
+
+  it("opens the cached app when the phone has no connection at all", () => {
+    // navigator.onLine === false means "do not wait for a network that is not
+    // there": a launch that sits on a timeout feels broken long before it fails
+    expect(sw).toMatch(/self\.navigator\.onLine === false/);
+    expect(sw).toMatch(/async function shell\(request\)/);
+    expect(sw).toMatch(/cache\.match\(abs\("\.\/"\),?\)?/);
+  });
+
+  it("does not hang a launch on a network that never answers", () => {
+    expect(sw).toMatch(/fetchWithTimeout\(request, NAV_TIMEOUT\)/);
+    expect(sw).toMatch(/new AbortController\(\)/);
   });
 
   it("has an offline page instead of returning a network error", () => {
     expect(sw).toMatch(/OFFLINE_PAGE/);
-    expect(sw).toMatch(/new Response\(OFFLINE_PAGE/);
+    expect(sw).toMatch(/offlinePage\(\)/);
     expect(sw).not.toMatch(/Response\.error\(\)/);
+  });
+
+  it("checks for a new worker past the HTTP cache", () => {
+    // GitHub Pages caches sw.js for ten minutes; a stale worker against a new
+    // index.html is the one combination that produces a blank app
+    expect(main).toMatch(/register\(`\$\{import\.meta\.env\.BASE_URL\}sw\.js`, \{ updateViaCache: "none" \}\)/);
   });
 });
