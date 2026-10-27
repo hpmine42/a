@@ -61,7 +61,9 @@ const title = computed(() => {
 
 const subtitle = computed(() => {
   if (props.phase === "searching") return "One quick pass over the photo.";
-  if (props.phase === "found") return props.extra ? "Scan both, or just the first:" : "Straightening it now.";
+  // Three buttons, three answers — the line is the menu, not a slogan.
+  if (props.phase === "found")
+    return props.extra ? "Both pages, just the first, or your own corners:" : "Straightening it now.";
   if (props.phase === "miss") return "Nothing to snap to — drag the corners yourself.";
   // A photo from the library was never a viewfinder: there was no detection to
   // be “off”, so do not blame a switch the user never touched.
@@ -345,6 +347,20 @@ watch(() => props.src, draw);
           <span class="choice-text">
             <strong>Just the first one</strong>
             <small>Straighten the page on the left</small>
+          </span>
+        </button>
+
+        <!--
+          Two sheets do not mean the outline is right, and they do not mean the
+          user wants both. Without this third way out, a wrong detection on a
+          photo of two pages left only "scan the pair" or "scan half of it" —
+          the corners tool was somewhere else entirely.
+        -->
+        <button class="choice" @click="emit('adjust')">
+          <span class="choice-icon"><Icon name="crop" :size="22" /></span>
+          <span class="choice-text">
+            <strong>Crop it myself</strong>
+            <small>Start from the marked page, then drag its corners</small>
           </span>
         </button>
       </template>

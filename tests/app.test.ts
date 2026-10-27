@@ -566,6 +566,84 @@ describe("capture without a page", () => {
   });
 });
 
+/**
+ * Two sheets in one photo: an open book, a receipt on the same desk. The search
+ * finds both and asks what to do — and that question used to have only two
+ * answers, neither of which helped when the outline itself was wrong.
+ */
+describe("two pages in one photo", () => {
+  /** The second sheet, just right of the first. */
+  const SECOND_QUAD = [
+    { x: 232, y: 20 },
+    { x: 430, y: 26 },
+    { x: 426, y: 304 },
+    { x: 236, y: 298 },
+  ];
+
+  async function bothFound(wrapper: VueWrapper) {
+    await choose(wrapper, "Find the page automatically");
+    await tick(900);
+  }
+
+  it("asks what to do and offers three answers", async () => {
+    setDetected([PAGE_QUAD, SECOND_QUAD]);
+    stubDemoFetch();
+    const wrapper = mount(App);
+    await tick(20);
+    await shootDemo(wrapper);
+    await bothFound(wrapper);
+
+    expect(wrapper.find(".review").exists()).toBe(true);
+    expect(wrapper.text()).toContain("Two pages found");
+
+    const choices = wrapper.findAll("button.choice");
+    expect(choices.length).toBe(3);
+    const labels = choices.map((b) => b.text()).join("\n");
+    expect(labels).toContain("Scan both pages");
+    expect(labels).toContain("Just the first one");
+    // the third way out: the corners tool, which used to be unreachable here
+    expect(labels).toContain("Crop it myself");
+    expect(scan.pages.length).toBe(0);
+    wrapper.unmount();
+  });
+
+  it("scans both pages when the pair is what the user wanted", async () => {
+    setDetected([PAGE_QUAD, SECOND_QUAD]);
+    stubDemoFetch();
+    const wrapper = mount(App);
+    await tick(20);
+    await shootDemo(wrapper);
+    await bothFound(wrapper);
+
+    await choose(wrapper, "Scan both pages");
+    await tick(900);
+
+    expect(scan.pages.length).toBe(2);
+    expect(scan.pages[0].quad).toEqual(PAGE_QUAD);
+    expect(scan.pages[1].quad).toEqual(SECOND_QUAD);
+    wrapper.unmount();
+  });
+
+  it("opens the corners on the marked page when the user crops it themselves", async () => {
+    setDetected([PAGE_QUAD, SECOND_QUAD]);
+    stubDemoFetch();
+    const wrapper = mount(App);
+    await tick(20);
+    await shootDemo(wrapper);
+    await bothFound(wrapper);
+
+    await choose(wrapper, "Crop it myself");
+    await tick(400);
+
+    // one page, not two — the photo is not silently split in half
+    expect(scan.pages.length).toBe(1);
+    // and the tool opens on the sheet the search found, not on the whole frame
+    expect(wrapper.find(".corner-editor").exists()).toBe(true);
+    expect(scan.pages[0].quad).toEqual(PAGE_QUAD);
+    wrapper.unmount();
+  });
+});
+
 describe("editor", () => {
   it("has one Optimize switch, off by default, and it toggles", async () => {
     stubDemoFetch();
