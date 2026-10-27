@@ -14,6 +14,19 @@ import {
 import { tap, thump } from "../lib/haptics";
 import { IMPORT_MAX } from "../lib/store";
 
+/**
+ * The Image Capture focus constraints. TypeScript's DOM lib knows
+ * `pointsOfInterest` on `InputDeviceInfo` but not on a track constraint, and the
+ * browsers that implement it accept exactly this shape.
+ */
+type FocusConstraint = MediaTrackConstraintSet & {
+  pointsOfInterest?: { x: number; y: number }[];
+  focusMode?: string;
+};
+type FocusConstraints = Omit<MediaTrackConstraints, "advanced"> & {
+  advanced?: FocusConstraint[];
+};
+
 const props = defineProps<{ thumbs: string[]; pageCount: number; restored?: number }>();
 const emit = defineEmits<{
   (
@@ -61,8 +74,19 @@ const softZoom = ref(1);
 const ultraId = ref<string | null>(null);
 const usingUltra = ref(false);
 
-const zoomLabel = computed(() => `${(usingUltra.value ? 0.5 : zoom.value * softZoom.value).toFixed(1)}×`);
+const zoomValue = computed(() => (usingUltra.value ? 0.5 : zoom.value * softZoom.value));
+const zoomLabel = computed(() => `${zoomValue.value.toFixed(1)}×`);
 const showZoomRow = computed(() => ready.value);
+/**
+ * The chips already say "1×" and "2×", so repeating "1.0×" beside them read as a
+ * third, broken chip. The number is only worth its space between the presets,
+ * where a chip cannot show what the pinch actually did.
+ */
+const showZoomValue = computed(() => {
+  if (usingUltra.value) return false;
+  const z = zoomValue.value;
+  return Math.abs(z - 1) > 0.06 && Math.abs(z - 2) > 0.1;
+});
 
 /* ---------------------------------------------------------------- install */
 
@@ -188,8 +212,9 @@ async function startStream(mode: "environment" | "user", deviceId?: string, keep
   frozen.value = false;
 
   const track = stream.getVideoTracks()[0];
-  const caps = (track?.getCapabilities?.() ?? {}) as { torch?: boolean };
+  const caps = (track?.getCapabilities?.() ?? {}) as { torch?: boolean; focusMode?: string[] };
   torchAvailable.value = Boolean(caps.torch);
+  focusModes = Array.isArray(caps.focusMode) ? caps.focusMode : [];
   torchOn.value = false;
 
   const z = zoomCapability(track);
@@ -404,10 +429,26 @@ async function flipCamera() {
 const pointers = new Map<number, { x: number; y: number }>();
 let pinchStart = 0;
 let pinchBase = 1;
-/** Where the last tap landed, in stage pixels — the ring that says "focusing". */
-const focusPoint = ref<{ x: number; y: number } | null>(null);
+/**
+ * Focus state.
+ *
+ * `focusRing` is where the ring is drawn, `focusSeq` restarts its animation so a
+ * second tap is visible, and `focusModes` is what the lens admits to supporting.
+ * A tap only ever reports something that actually happened: if the lens cannot
+ * take a focus point, the ring is drawn where the camera really focuses (the
+ * middle), and if nothing could be applied the viewfinder says so once.
+ */
+const focusRing = ref<{ x: number; y: number } | null>(null);
+const focusSeq = ref(0);
+const focusNotice = ref<string | null>(null);
 let focusTimer = 0;
+let focusNoticeTimer = 0;
+/** Puts the lens back on continuous autofocus after a tap. */
+let focusArmTimer = 0;
+let focusModes: string[] = [];
 let tapStart = { x: 0, y: 0, at: 0 };
+/** A tap that started on a chip or the shutter is a button press, not a focus. */
+let tapEligible = false;
 
 /**
  * Tap to focus.
@@ -423,35 +464,91 @@ async function focusAt(clientX: number, clientY: number) {
   const rect = el.getBoundingClientRect();
   const x = clientX - rect.left;
   const y = clientY - rect.top;
-  focusPoint.value = { x, y };
-  window.clearTimeout(focusTimer);
-  focusTimer = window.setTimeout(() => (focusPoint.value = null), 900);
-
   const track = stream?.getVideoTracks()[0];
-  const caps = (track?.getCapabilities?.() ?? {}) as { focusMode?: string[] };
-  if (!track || !caps.focusMode?.length) return;
   const map = coverRect();
-  if (!map) return;
-  const vx = Math.min(1, Math.max(0, (x - map.dx) / (video.value!.videoWidth * map.scale)));
-  const vy = Math.min(1, Math.max(0, (y - map.dy) / (video.value!.videoHeight * map.scale)));
-  const mode = caps.focusMode.includes("single-shot") ? "single-shot" : caps.focusMode[0];
-  try {
-    await track.applyConstraints({
-      advanced: [{ pointsOfInterest: [{ x: vx, y: vy }], focusMode: mode } as MediaTrackConstraintSet],
-    });
-  } catch {
-    /* the tap still showed the ring; nothing else to do */
+  const v = video.value;
+  if (!track || !map || !v?.videoWidth) return;
+
+  /** The tap, as the camera's normalised coordinates (0..1 of the frame). */
+  const point = {
+    x: Math.min(1, Math.max(0, (x - map.dx) / (v.videoWidth * map.scale))),
+    y: Math.min(1, Math.max(0, (y - map.dy) / (v.videoHeight * map.scale))),
+  };
+  const mode = focusModes.includes("single-shot") ? "single-shot" : focusModes[0];
+
+  /**
+   * Three ways to ask, most precise first. `pointsOfInterest` is what makes the
+   * focus follow the finger; where it is ignored, a plain `single-shot` still
+   * re-runs the autofocus search — the camera then focuses on its own window,
+   * so the ring has to move to the middle rather than lie about the spot.
+   */
+  const attempts: { constraints: FocusConstraint; at: { x: number; y: number } }[] = [
+    { constraints: { pointsOfInterest: [point], focusMode: mode }, at: { x, y } },
+    { constraints: { pointsOfInterest: [point] }, at: { x, y } },
+    { constraints: { focusMode: mode }, at: { x: rect.width / 2, y: rect.height / 2 } },
+  ];
+
+  let applied: { x: number; y: number } | null = null;
+  for (const attempt of attempts) {
+    try {
+      await track.applyConstraints({ advanced: [attempt.constraints] } as FocusConstraints);
+      // A browser that does not know the constraint can resolve anyway, so the
+      // attempt only counts if the track then reports the thing it was asked for.
+      const settings = track.getSettings() as unknown as {
+        pointsOfInterest?: { x: number; y: number }[];
+        focusMode?: string;
+      };
+      const tookPoints = Array.isArray(settings.pointsOfInterest) && settings.pointsOfInterest.length > 0;
+      const tookMode = attempt.constraints.focusMode ? settings.focusMode === mode : true;
+      if (attempt.constraints.pointsOfInterest && !tookPoints) continue;
+      if (!tookMode && !tookPoints) continue;
+      applied = attempt.at;
+      break;
+    } catch {
+      /* try the next, less demanding request */
+    }
+  }
+
+  if (!applied) {
+    // Nothing to focus: say it once instead of flashing a ring that means nothing
+    if (!focusNotice.value) {
+      window.clearTimeout(focusNoticeTimer);
+      focusNotice.value = "This lens focuses by itself";
+      focusNoticeTimer = window.setTimeout(() => (focusNotice.value = null), 2200);
+    }
+    return;
+  }
+
+  tap();
+  focusRing.value = applied;
+  focusSeq.value++;
+  window.clearTimeout(focusTimer);
+  focusTimer = window.setTimeout(() => (focusRing.value = null), 900);
+
+  // Leaving the lens on single-shot freezes it at one distance, which is what
+  // makes a camera feel broken afterwards. Hand it back to continuous.
+  if (mode === "single-shot" && focusModes.includes("continuous")) {
+    window.clearTimeout(focusArmTimer);
+    focusArmTimer = window.setTimeout(() => {
+      void track
+        .applyConstraints({ advanced: [{ focusMode: "continuous" }] } as FocusConstraints)
+        .catch(() => undefined);
+    }, 1600);
   }
 }
 
-function distance() {
+/** Pixel distance between the two fingers currently on the stage. */
+function distance(): number {
   const [a, b] = [...pointers.values()];
   if (!a || !b) return 0;
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
 function onPointerDown(event: PointerEvent) {
-  if (pointers.size === 0) tapStart = { x: event.clientX, y: event.clientY, at: performance.now() };
+  if (pointers.size === 0) {
+    tapStart = { x: event.clientX, y: event.clientY, at: performance.now() };
+    tapEligible = !(event.target as HTMLElement | null)?.closest?.("button, a, input, label");
+  }
   pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
   if (pointers.size === 2) {
     pinchStart = distance();
@@ -471,10 +568,13 @@ function onPointerMove(event: PointerEvent) {
 function onPointerUp(event: PointerEvent) {
   pointers.delete(event.pointerId);
   if (pointers.size < 2) pinchStart = 0;
-  // a tap (not a pinch, not a swipe) means "focus here"
+  // a tap on the picture (not on a chip, not a pinch, not a swipe) focuses there
   const moved = Math.hypot(event.clientX - tapStart.x, event.clientY - tapStart.y);
-  if (pointers.size === 0 && moved < 12 && performance.now() - tapStart.at < 350) {
-    void focusAt(event.clientX, event.clientY);
+  if (pointers.size === 0) {
+    if (tapEligible && moved < 12 && performance.now() - tapStart.at < 350) {
+      void focusAt(event.clientX, event.clientY);
+    }
+    tapEligible = false;
   }
 }
 
@@ -775,6 +875,9 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   disposed = true;
   window.clearInterval(wakeTimer);
+  window.clearTimeout(focusTimer);
+  window.clearTimeout(focusNoticeTimer);
+  window.clearTimeout(focusArmTimer);
   unwatchInstall?.();
   window.removeEventListener("focus", detectInstallState);
   document.removeEventListener("visibilitychange", onVisibility);
@@ -890,7 +993,7 @@ watch(autoOn, (on) => {
         >
           2×
         </button>
-        <span class="zoom-value" aria-live="polite">{{ zoomLabel }}</span>
+        <span v-if="showZoomValue" class="zoom-value" aria-live="polite">{{ zoomLabel }}</span>
       </div>
 
       <p v-if="props.restored" class="restored-chip" role="status">
@@ -898,9 +1001,10 @@ watch(autoOn, (on) => {
       </p>
 
       <div
-        v-if="focusPoint"
+        v-if="focusRing"
+        :key="focusSeq"
         class="focus-ring"
-        :style="{ left: `${focusPoint.x}px`, top: `${focusPoint.y}px` }"
+        :style="{ left: `${focusRing.x}px`, top: `${focusRing.y}px` }"
         aria-hidden="true"
       />
 
@@ -908,6 +1012,10 @@ watch(autoOn, (on) => {
         <Icon name="camera" :size="18" />
         <span>Preview paused — tap to restart</span>
       </button>
+
+      <Transition name="fade">
+        <p v-if="focusNotice" class="focus-note" role="status">{{ focusNotice }}</p>
+      </Transition>
 
       <Transition name="fade">
         <div v-if="loading" class="camera-busy" role="status" aria-live="polite">

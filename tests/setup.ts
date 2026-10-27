@@ -96,12 +96,37 @@ export function allowCamera() {
   });
 }
 
+/**
+ * What the fake lens admits to.
+ *
+ * `echo` decides whether a constraint that was applied is reported back in
+ * `getSettings()` — that is how the app tells "the browser understood" from
+ * "the browser resolved and ignored it", so both paths can be tested.
+ */
+export const fakeCamera = {
+  echo: true,
+  caps: {} as Record<string, unknown>,
+  applied: [] as unknown[],
+  reset() {
+    fakeCamera.echo = true;
+    fakeCamera.caps = {};
+    fakeCamera.applied = [];
+  },
+};
+
 export function fakeCameraStream() {
+  const state: Record<string, unknown> = { deviceId: "main-back" };
   const track = {
     stop: () => undefined,
-    getCapabilities: () => ({}),
-    getSettings: () => ({ deviceId: "main-back" }),
-    applyConstraints: async () => undefined,
+    getCapabilities: () => ({ ...fakeCamera.caps }),
+    getSettings: () => ({ ...state }),
+    applyConstraints: async (constraints?: MediaTrackConstraints) => {
+      fakeCamera.applied.push(constraints);
+      const advanced = (constraints?.advanced ?? []) as Record<string, unknown>[];
+      if (fakeCamera.echo) {
+        for (const set of advanced) Object.assign(state, set);
+      }
+    },
   };
   return {
     getVideoTracks: () => [track],
@@ -119,6 +144,17 @@ export function installDomStubs() {
   } as unknown as typeof HTMLCanvasElement.prototype.getContext;
 
   HTMLCanvasElement.prototype.toDataURL = () => "data:image/jpeg;base64,AAAA";
+
+  // jsdom lays nothing out: the overlay would report 0x0 and every "where on the
+  // screen did that tap land" calculation would bail out before it ran
+  Object.defineProperty(HTMLCanvasElement.prototype, "clientWidth", {
+    configurable: true,
+    get: () => 400,
+  });
+  Object.defineProperty(HTMLCanvasElement.prototype, "clientHeight", {
+    configurable: true,
+    get: () => 600,
+  });
 
   // no encoder in jsdom: hand back a tiny blob so the persistence path runs
   HTMLCanvasElement.prototype.toBlob = function (

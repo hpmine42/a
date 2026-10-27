@@ -106,7 +106,11 @@ can scale as one piece. The desktop-only "phone on a desk" frame is gated behind
 screen.
 
 Sizes are deliberately matched to Google's scanner: 96px shutter, 52px labelled
-chips, 54px round buttons, 12.5px captions.
+chips, 54px round buttons, 12.5px captions. On a 390px phone the camera's top
+bar has to hold a wordmark and three labelled chips (Detect, Auto, Light), so
+those chips drop to 46px there — still a comfortable target — and the row wraps
+rather than letting the last chip run off the edge, which is what a fixed row
+did before.
 
 Some phones browse in "desktop site" mode, which reports a ~980px viewport on a
 ~410px screen and makes the browser paint everything at about 40%. `src/lib/fit.ts`

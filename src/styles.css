@@ -339,39 +339,79 @@ img {
     linear-gradient(to top, rgba(5, 6, 7, 0.6), transparent 22%);
 }
 
+/*
+ * The top bar has to survive a 360px phone with every chip switched on, and the
+ * stage clips to a 26px corner radius — a 14px inset made the outer chips look
+ * cut off on both sides. So: inset past the corner, wrap instead of overflow,
+ * and the tools shrink on narrow screens rather than being cropped.
+ */
 .camera-top {
   position: absolute;
   z-index: 3;
   inset: 0 0 auto;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  padding: calc(14px * var(--u));
+  gap: calc(8px * var(--u));
+  padding: max(calc(18px * var(--u)), env(safe-area-inset-top))
+    calc(18px * var(--u)) calc(10px * var(--u));
 }
 
 .camera-top-right {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
   gap: calc(8px * var(--u));
+  /* lets the group shrink and wrap its chips instead of pushing past the edge */
+  min-width: 0;
+  flex: 0 1 auto;
+  margin-left: auto;
 }
 
-/* Mark + wordmark: on first launch the app has to say its own name. */
+/* Wordmark: on first launch the app has to say its own name. It is not a chip —
+   a pill around it costs 40px that the tools need more. */
 .brand {
   display: inline-flex;
   align-items: center;
   gap: calc(9px * var(--u));
-  height: var(--icon-btn);
-  padding: 0 calc(18px * var(--u));
-  border-radius: 999px;
-  background: rgba(20, 23, 28, 0.62);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  backdrop-filter: blur(14px);
+  height: var(--tap);
+  padding: 0 calc(2px * var(--u));
+  flex: 0 0 auto;
+  text-shadow: 0 1px 12px rgba(0, 0, 0, 0.55);
 }
 
 .brand-name {
-  font-size: calc(15px * var(--u));
+  font-size: calc(15.5px * var(--u));
   font-weight: 700;
-  letter-spacing: 0.01em;
+  letter-spacing: 0.02em;
   color: var(--text);
+}
+
+/* Four labelled chips (Detect, Auto, Light) plus the wordmark do not fit a
+   390px phone at full size. Tighten them rather than crop them: 46px is still
+   a comfortable target, and the labels stay. */
+@media (max-width: 479px) {
+  .camera-top .control {
+    height: calc(46px * var(--u));
+    padding: 0 calc(13px * var(--u));
+    gap: calc(7px * var(--u));
+    font-size: calc(14px * var(--u));
+  }
+
+  .camera-top .control svg {
+    width: calc(17px * var(--u));
+    height: calc(17px * var(--u));
+  }
+
+  .brand {
+    height: calc(46px * var(--u));
+  }
+
+  .brand-name {
+    font-size: calc(14.5px * var(--u));
+  }
 }
 
 .shutter-flash {
@@ -456,6 +496,25 @@ img {
 
 /* The preview is showing its last frame and nothing brings it back by itself:
    say so, and make the fix one tap. */
+/* Says out loud what a tap could not do, instead of a ring that means nothing */
+.focus-note {
+  position: absolute;
+  z-index: 5;
+  left: 50%;
+  bottom: calc(72px * var(--u));
+  transform: translateX(-50%);
+  margin: 0;
+  padding: calc(8px * var(--u)) calc(14px * var(--u));
+  border-radius: 999px;
+  font-size: calc(12.5px * var(--u));
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--text);
+  background: rgba(10, 12, 15, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  backdrop-filter: blur(12px);
+}
+
 /* Tap to focus: a ring that appears where the finger was, and fades */
 .focus-ring {
   position: absolute;

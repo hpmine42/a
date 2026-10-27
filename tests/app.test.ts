@@ -3,7 +3,7 @@ import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 import App from "../src/App.vue";
 import { clearPages, flushSave, scan } from "../src/lib/store";
 import { memoryStore, useProjectStore } from "../src/lib/storage";
-import { allowCamera, denyCamera, installDomStubs } from "./setup";
+import { allowCamera, denyCamera, fakeCamera, installDomStubs } from "./setup";
 
 installDomStubs();
 
@@ -58,6 +58,7 @@ async function choose(wrapper: VueWrapper, label: string) {
 
 beforeEach(() => {
   useProjectStore(null);
+  fakeCamera.reset();
   clearPages();
   window.localStorage.clear();
   denyCamera();
@@ -565,7 +566,7 @@ describe("pages", () => {
 });
 
 describe("camera zoom", () => {
-  it("offers zoom chips and reports the current zoom", async () => {
+  it("offers zoom chips without repeating the number beside them", async () => {
     allowCamera();
     const wrapper = mount(App);
     await tick(40);
@@ -573,11 +574,33 @@ describe("camera zoom", () => {
     const chips = wrapper.findAll("button.zoom-chip");
     expect(chips.map((c) => c.text())).toContain("1×");
     expect(chips.map((c) => c.text())).toContain("2×");
-    expect(wrapper.find(".zoom-value").text()).toBe("1.0×");
-    // pressing a chip is how the lens moves without the pinch gesture
+    // at a preset the active chip already says it; a "1.0×" next to it read as a
+    // third, broken chip
+    expect(wrapper.find(".zoom-value").exists()).toBe(false);
     await wrapper.findAll("button.zoom-chip")[2].trigger("click");
     await tick(50);
-    expect(wrapper.find(".zoom-value").text()).toBe("2.0×");
+    expect(wrapper.find(".zoom-value").exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("shows the number only while a pinch is between the presets", async () => {
+    allowCamera();
+    const wrapper = mount(App);
+    await tick(40);
+
+    const stage = wrapper.find(".camera-stage");
+    await stage.trigger("pointerdown", { pointerId: 1, clientX: 100, clientY: 300 });
+    await stage.trigger("pointerdown", { pointerId: 2, clientX: 200, clientY: 300 });
+    await stage.trigger("pointermove", { pointerId: 2, clientX: 260, clientY: 300 });
+    await tick(30);
+
+    // 100px apart, spread to 160px
+    expect(wrapper.find(".zoom-value").text()).toBe("1.6×");
+
+    // and it goes away again once the pinch lands on a preset
+    await stage.trigger("pointermove", { pointerId: 2, clientX: 300, clientY: 300 });
+    await tick(30);
+    expect(wrapper.find(".zoom-value").exists()).toBe(false);
     wrapper.unmount();
   });
 
@@ -679,5 +702,68 @@ describe("coming back to the app", () => {
     expect(second.find(".stack").exists()).toBe(true);
     second.unmount();
     useProjectStore(null);
+  });
+});
+
+describe("focusing by tapping the picture", () => {
+  /** A tap: down and up in the same spot, which is what the stage watches for. */
+  async function tapStage(wrapper: VueWrapper, x = 200, y = 300) {
+    const stage = wrapper.find(".camera-stage");
+    await stage.trigger("pointerdown", { pointerId: 7, clientX: x, clientY: y });
+    await stage.trigger("pointerup", { pointerId: 7, clientX: x, clientY: y });
+    await tick(30);
+  }
+
+  it("asks the lens to focus where the finger was, and shows the ring", async () => {
+    allowCamera();
+    fakeCamera.caps = { focusMode: ["continuous", "single-shot"] };
+    const wrapper = mount(App);
+    await tick(40);
+
+    await tapStage(wrapper);
+
+    expect(wrapper.find(".focus-ring").exists()).toBe(true);
+    const asked = JSON.stringify(fakeCamera.applied);
+    expect(asked).toContain("pointsOfInterest");
+    expect(asked).toContain("single-shot");
+    // and it hands the lens back to continuous, or it would stay locked
+    expect(wrapper.find(".focus-note").exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("falls back to a plain refocus when the lens ignores focus points", async () => {
+    allowCamera();
+    // resolves, but reports nothing back: the browser ignored it
+    fakeCamera.echo = false;
+    fakeCamera.caps = { focusMode: ["continuous", "single-shot"] };
+    const wrapper = mount(App);
+    await tick(40);
+
+    await tapStage(wrapper);
+    await tick(30);
+
+    const asked = JSON.stringify(fakeCamera.applied);
+    expect(asked).toContain("focusMode");
+    // centred, because that is where the camera actually focuses
+    expect(wrapper.find(".focus-ring").exists()).toBe(false);
+    expect(wrapper.find(".focus-note").exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  it("does not fire when the tap was meant for a chip", async () => {
+    allowCamera();
+    fakeCamera.caps = { focusMode: ["continuous", "single-shot"] };
+    const wrapper = mount(App);
+    await tick(40);
+    const before = fakeCamera.applied.length;
+
+    const chip = wrapper.find("button.zoom-chip");
+    await chip.trigger("pointerdown", { pointerId: 3, clientX: 10, clientY: 10 });
+    await chip.trigger("pointerup", { pointerId: 3, clientX: 10, clientY: 10 });
+    await tick(30);
+
+    expect(wrapper.find(".focus-ring").exists()).toBe(false);
+    expect(fakeCamera.applied.length).toBe(before);
+    wrapper.unmount();
   });
 });
