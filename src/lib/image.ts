@@ -105,6 +105,21 @@ export function rotateImageData(img: ImageData, quarter: number): ImageData {
   return out;
 }
 
+/**
+ * Can this file be a photo?
+ *
+ * `accept="image/*"` guarantees nothing: iPhone HEIC files reach the picker with
+ * an empty MIME type on many Android builds, and a strict `type.startsWith`
+ * filter then swallowed the whole selection — the picker closed and the app did
+ * nothing at all. The extension is the second opinion.
+ */
+const PHOTO_EXT = /\.(jpe?g|png|webp|heic|heif|avif|gif|bmp|tiff?|dng)$/i;
+
+export function looksLikePhoto(file: { type: string; name: string }): boolean {
+  if (file.type.startsWith("image/")) return true;
+  return (file.type === "" || file.type === "application/octet-stream") && PHOTO_EXT.test(file.name);
+}
+
 export function slug(input: string): string {
   return (
     input

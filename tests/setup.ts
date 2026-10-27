@@ -39,6 +39,7 @@ function makeContext(canvas: HTMLCanvasElement): Ctx2D {
     "setTransform",
     "scale",
     "translate",
+    "rotate",
     "drawImage",
     "putImageData",
     "setLineDash",

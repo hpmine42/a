@@ -1,13 +1,20 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { Pt, Quad } from "../lib/cv";
 import { prefersReducedMotion, SWEEP_MS } from "../lib/anim";
 import { canvasFor } from "../lib/image";
 import { clampToBox, containFit, loupeSourceRect, toImagePoint, type Fit } from "../lib/geometry";
+import { applyView, quarter, sourceQuad, viewQuad, viewSize } from "../lib/orient";
 
 const props = defineProps<{
   src: ImageData;
   quad: Quad;
+  /**
+   * How far the *page* is turned (0 | 90 | 180 | 270), while `quad` stays in the
+   * photo's own pixels. The tool draws the photo turned, so the corners a person
+   * places are the corners they will get — see `lib/orient.ts`.
+   */
+  rotation?: number;
   /** A detection pass is running: show a sweep so the wait has a reason. */
   searching?: boolean;
 }>();
@@ -40,6 +47,17 @@ let drag: Drag = null;
 
 const HANDLE_R = 13;
 const TOUCH_R = 34;
+
+/* ------------------------------------------------------------- orientation */
+
+/** Quarter turns the page is displayed with; 0 for a page shot upright. */
+const turn = computed(() => quarter(props.rotation ?? 0));
+/** The photo's size as drawn: swapped on a half turn count. */
+const view = computed(() => viewSize(props.src.width, props.src.height, turn.value));
+/** The corners as the user sees them: handle 0 is the top left *on screen*. */
+const seen = computed<Quad>(() =>
+  viewQuad(props.quad as Quad, turn.value, props.src.width, props.src.height)
+);
 
 function markDirty() {
   dirty = true;
@@ -85,7 +103,7 @@ function fit() {
   if (!el) return null;
   const rect = el.getBoundingClientRect();
   if (!rect.width || !rect.height) return null;
-  return { rect, ...containFit(props.src.width, props.src.height, rect.width, rect.height) };
+  return { rect, ...containFit(view.value.w, view.value.h, rect.width, rect.height) };
 }
 
 function toImage(clientX: number, clientY: number): Pt | null {
@@ -134,15 +152,25 @@ function render() {
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
   g.clearRect(0, 0, w, h);
 
-  const f = containFit(props.src.width, props.src.height, w, h);
-  g.drawImage(canvasFor(props.src), f.dx, f.dy, props.src.width * f.scale, props.src.height * f.scale);
+  const vw = view.value.w;
+  const vh = view.value.h;
+  g.imageSmoothingQuality = "high";
+  const f = containFit(vw, vh, w, h);
+  // Draw the photo the way the page is shown, so a page that was turned is not
+  // suddenly sideways here and the corners land where the page will be.
+  g.save();
+  g.translate(f.dx, f.dy);
+  g.scale(f.scale, f.scale);
+  applyView(g, turn.value, props.src.width, props.src.height);
+  g.drawImage(canvasFor(props.src), 0, 0);
+  g.restore();
 
-  const pts = props.quad.map((p) => ({ x: p.x * f.scale + f.dx, y: p.y * f.scale + f.dy }));
+  const pts = seen.value.map((p) => ({ x: p.x * f.scale + f.dx, y: p.y * f.scale + f.dy }));
 
   // dim the photo outside the sheet
   g.save();
   g.beginPath();
-  g.rect(f.dx, f.dy, props.src.width * f.scale, props.src.height * f.scale);
+  g.rect(f.dx, f.dy, vw * f.scale, vh * f.scale);
   g.moveTo(pts[0].x, pts[0].y);
   for (let i = 1; i < 4; i++) g.lineTo(pts[i].x, pts[i].y);
   g.closePath();
@@ -182,7 +210,7 @@ function render() {
   // detector needs instead of a frozen picture.
   if (props.searching) {
     const top = f.dy;
-    const height = props.src.height * f.scale;
+    const height = vh * f.scale;
     // enter above the sheet, leave below it: the pass is visibly complete
     const y = top + height * (-0.06 + sweep * 1.12);
     g.save();
@@ -196,10 +224,10 @@ function render() {
     band.addColorStop(0.5, "rgba(255, 192, 97, 0.22)");
     band.addColorStop(1, "rgba(255, 192, 97, 0)");
     g.fillStyle = band;
-    g.fillRect(f.dx, y - 46, props.src.width * f.scale, 92);
+    g.fillRect(f.dx, y - 46, vw * f.scale, 92);
     g.beginPath();
     g.moveTo(f.dx, y);
-    g.lineTo(f.dx + props.src.width * f.scale, y);
+    g.lineTo(f.dx + vw * f.scale, y);
     g.lineWidth = 2;
     g.strokeStyle = "rgba(255, 214, 152, 0.9)";
     g.stroke();
@@ -251,9 +279,16 @@ function drawLoupe(handle: Pt, f: Fit, w: number, h: number) {
   g.fillStyle = "#0a0b0d";
   g.fillRect(centre.x - R, centre.y - R, R * 2, R * 2);
 
+  // The window is measured in the drawn (turned) frame, so the source has to be
+  // turned the same way inside the clip — otherwise the loupe magnifies a spot
+  // next to the corner it is attached to.
   const img = canvasFor(props.src);
   g.imageSmoothingQuality = "high";
-  g.drawImage(img, src.sx, src.sy, src.size, src.size, centre.x - R, centre.y - R, R * 2, R * 2);
+  g.translate(centre.x - R, centre.y - R);
+  g.scale((R * 2) / src.size, (R * 2) / src.size);
+  g.translate(-src.sx, -src.sy);
+  applyView(g, turn.value, props.src.width, props.src.height);
+  g.drawImage(img, 0, 0);
 
   // reticle marks the exact pixel under the corner
   g.strokeStyle = "rgba(255, 192, 97, 0.95)";
@@ -307,12 +342,19 @@ function drawLoupe(handle: Pt, f: Fit, w: number, h: number) {
  * pixel (ten with Shift), and the canvas draws the ring so the focus is visible.
  */
 function nudge(index: number, dx: number, dy: number): void {
-  const next = props.quad.map((p) => ({ ...p })) as Quad;
-  const clampX = (v: number) => Math.max(0, Math.min(props.src.width, v));
-  const clampY = (v: number) => Math.max(0, Math.min(props.src.height, v));
+  const vw = view.value.w;
+  const vh = view.value.h;
+  const next = seen.value.map((p) => ({ ...p })) as Quad;
+  const clampX = (v: number) => Math.max(0, Math.min(vw, v));
+  const clampY = (v: number) => Math.max(0, Math.min(vh, v));
   next[index] = { x: clampX(next[index].x + dx), y: clampY(next[index].y + dy) };
-  emit("update:quad", next);
+  emit("update:quad", fromView(next));
   markDirty();
+}
+
+/** View corners (what the user drags) → the photo's own pixels. */
+function fromView(next: Quad): Quad {
+  return sourceQuad(next, turn.value, props.src.width, props.src.height);
 }
 
 function onHandleKey(index: number, event: KeyboardEvent): void {
@@ -342,7 +384,7 @@ function pointerDown(event: PointerEvent) {
 
   let nearest = -1;
   let nearestDist = Infinity;
-  props.quad.forEach((c, i) => {
+  seen.value.forEach((c, i) => {
     const d = Math.hypot(c.x - p.x, c.y - p.y);
     if (d < nearestDist) {
       nearestDist = d;
@@ -352,8 +394,8 @@ function pointerDown(event: PointerEvent) {
 
   if (nearestDist < grab) {
     drag = { kind: "corner", index: nearest };
-  } else if (insidePolygon(p, props.quad)) {
-    drag = { kind: "whole", start: p, origin: props.quad.map((q) => ({ ...q })) as Quad };
+  } else if (insidePolygon(p, seen.value)) {
+    drag = { kind: "whole", start: p, origin: seen.value.map((q) => ({ ...q })) as Quad };
   } else {
     return;
   }
@@ -369,25 +411,27 @@ function pointerMove(event: PointerEvent) {
     const f = fit();
     if (!f) return;
     const grab = TOUCH_R / f.scale;
-    const near = props.quad.some((c) => Math.hypot(c.x - p.x, c.y - p.y) < grab);
-    hovering.value = near || insidePolygon(p, props.quad);
-    if (canvas.value) canvas.value.style.cursor = near ? "grab" : insidePolygon(p, props.quad) ? "move" : "default";
+    const near = seen.value.some((c) => Math.hypot(c.x - p.x, c.y - p.y) < grab);
+    hovering.value = near || insidePolygon(p, seen.value);
+    if (canvas.value) canvas.value.style.cursor = near ? "grab" : insidePolygon(p, seen.value) ? "move" : "default";
     return;
   }
 
-  const clampX = (v: number) => Math.max(0, Math.min(props.src.width, v));
-  const clampY = (v: number) => Math.max(0, Math.min(props.src.height, v));
+  const vw = view.value.w;
+  const vh = view.value.h;
+  const clampX = (v: number) => Math.max(0, Math.min(vw, v));
+  const clampY = (v: number) => Math.max(0, Math.min(vh, v));
   let next: Quad;
 
   if (drag.kind === "corner") {
-    next = props.quad.map((q) => ({ ...q })) as Quad;
+    next = seen.value.map((q) => ({ ...q })) as Quad;
     next[drag.index] = { x: clampX(p.x), y: clampY(p.y) };
   } else {
     const dx = p.x - drag.start.x;
     const dy = p.y - drag.start.y;
     next = drag.origin.map((q) => ({ x: clampX(q.x + dx), y: clampY(q.y + dy) })) as Quad;
   }
-  emit("update:quad", next);
+  emit("update:quad", fromView(next));
   markDirty();
   event.preventDefault();
 }
@@ -419,7 +463,7 @@ onBeforeUnmount(() => {
 });
 
 watch(
-  () => [props.quad, props.src] as const,
+  () => [props.quad, props.src, turn.value] as const,
   () => markDirty(),
   { deep: true }
 );

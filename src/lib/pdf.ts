@@ -1,7 +1,7 @@
 import type { jsPDF as JsPdf } from "jspdf";
-import { enhance, insetQuad, outputSize, warp } from "./cv";
+import { enhance, outputSize, warp } from "./cv";
 import { imageDataToCanvas, nextFrame, rotateImageData, slug } from "./image";
-import { EDGE_INSET, EXPORT_MAX, ensureSource, naturalSide, type Page } from "./store";
+import { cropQuad, EXPORT_MAX, ensureSource, naturalSide, type Page } from "./store";
 
 export type PageFormat = "a4" | "letter" | "fit";
 
@@ -263,7 +263,7 @@ async function renderPage(
   // A page restored from storage but never decoded carries a 1x1 placeholder.
   // Warping that produces a convincing black rectangle, so say what happened.
   if (page.src.width < 8 || page.src.height < 8) throw new ExportError("render");
-  const quad = insetQuad(page.quad, EDGE_INSET);
+  const quad = cropQuad(page);
   // never scale a page above what the photo has: invented pixels cost file
   // size and buy nothing a reader can see
   // Twenty pages at full size is half a gigabyte of transient RGBA on a phone.

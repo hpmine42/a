@@ -253,6 +253,8 @@ function onQuad(next: Quad) {
   const current = page.value;
   if (!current) return;
   current.quad = next;
+  // hand-placed corners are a real crop, so they get the protective inset again
+  current.whole = false;
   current.warped = null;
   current.warpedSide = 0;
   current.cacheKey = "";
@@ -495,6 +497,7 @@ defineExpose({ openFrame: () => (mode.value = "frame") });
         v-if="mode === 'frame'"
         :src="page.src"
         :quad="page.quad"
+        :rotation="page.rotation"
         :searching="searching"
         :class="{ missed }"
         @update:quad="onQuad"

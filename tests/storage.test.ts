@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { installDomStubs } from "./setup";
+import { fakeCanvas, installDomStubs } from "./setup";
 import { memoryStore, useProjectStore } from "../src/lib/storage";
 import {
   addPage,
@@ -77,6 +77,7 @@ describe("saving and restoring a project", () => {
       { x: 2, y: 45 },
     ];
     b.opts.optimize = true;
+    b.whole = true;
     rotatePage(b);
     scan.filename = "Steuer 2025";
     scan.format = "letter";
@@ -92,6 +93,9 @@ describe("saving and restoring a project", () => {
     expect(scan.pages.map((p) => p.name)).toEqual(["receipt", "letter"]);
     expect(scan.pages[0].quad[0]).toEqual({ x: 4, y: 5 });
     expect(scan.pages[1].rotation).toBe(90);
+    // "keep the whole photo" survives a reload: the page must not sprout the
+    // hairline inset again just because the app was closed
+    expect(scan.pages[1].whole).toBe(true);
     expect(scan.pages[1].opts.optimize).toBe(true);
     expect(scan.filename).toBe("Steuer 2025");
     expect(scan.format).toBe("letter");
@@ -111,6 +115,26 @@ describe("saving and restoring a project", () => {
     // the stubbed decoder returns 240x320
     expect(page.src.width).toBe(240);
     expect(page.src.height).toBe(320);
+  });
+
+  it("keeps a page dirty until its photo is actually on disk", async () => {
+    // a full disk or a private window can refuse one encode; the page must not
+    // be forgotten because of it, or it survives the session and disappears on
+    // the next launch with nothing to see in between
+    const page = addPage(photo(), "scan");
+    scheduleSave(page);
+    fakeCanvas.blank = true;
+    await flushSave();
+    closeApp();
+    expect(await restoreProject()).toBe(0);
+    scan.pages.splice(0, scan.pages.length);
+
+    // the page is still in memory, still waiting to be written
+    scan.pages.push(page);
+    fakeCanvas.blank = false;
+    await flushSave();
+    closeApp();
+    expect(await restoreProject()).toBe(1);
   });
 
   it("keeps the order the user dragged the pages into", async () => {
