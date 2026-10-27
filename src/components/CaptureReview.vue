@@ -21,6 +21,8 @@ const props = defineProps<{
   phase?: ReviewPhase;
   /** The sheet the search found, in source pixels, for the reveal animation. */
   found?: Quad | null;
+  /** A second sheet in the same photo, when there is one. */
+  extra?: Quad | null;
 }>();
 
 const emit = defineEmits<{
@@ -28,6 +30,8 @@ const emit = defineEmits<{
   (e: "manual"): void;
   (e: "whole"): void;
   (e: "retake"): void;
+  (e: "both"): void;
+  (e: "single"): void;
 }>();
 
 const canvas = ref<HTMLCanvasElement | null>(null);
@@ -39,7 +43,7 @@ let phaseStart = 0;
 
 const title = computed(() => {
   if (props.phase === "searching") return "Looking for the page…";
-  if (props.phase === "found") return "Page found";
+  if (props.phase === "found") return props.extra ? "Two pages found" : "Page found";
   if (props.phase === "miss") return "No page edge found";
   if (props.origin === "upload") return "How should we crop this?";
   return props.detectionOn ? "No page edge found" : "How should we crop this?";
@@ -47,7 +51,7 @@ const title = computed(() => {
 
 const subtitle = computed(() => {
   if (props.phase === "searching") return "One quick pass over the photo.";
-  if (props.phase === "found") return "Straightening it now.";
+  if (props.phase === "found") return props.extra ? "Scan both, or just the first:" : "Straightening it now.";
   if (props.phase === "miss") return "Nothing to snap to — drag the corners yourself.";
   // A photo from the library was never a viewfinder: there was no detection to
   // be “off”, so do not blame a switch the user never touched.
@@ -57,6 +61,8 @@ const subtitle = computed(() => {
     : "Detection is off, so nothing was cropped. Pick one option:";
 });
 
+/** Two sheets: the sheet stays up and asks which, because this one *is* a question. */
+const asking = computed(() => props.phase === "found" && Boolean(props.extra));
 const showChoices = computed(() => props.phase !== "searching" && props.phase !== "found");
 
 function fitFor(w: number, h: number) {
@@ -122,52 +128,68 @@ function draw() {
     ctx.strokeRect(dx + 0.5, dy + 0.5, dw - 1, dh - 1);
   }
 
-  if (props.phase === "found" && props.found) {
-    const t = prefersReducedMotion()
-      ? 1
-      : Math.min(1, (performance.now() - phaseStart) / 280);
-    const grow = 1 + (1 - t) * 0.06;
-    const cx = dx + dw / 2;
-    const cy = dy + dh / 2;
-    const pts = props.found.map((p) => {
-      const q = sx(p);
-      return { x: cx + (q.x - cx) * grow, y: cy + (q.y - cy) * grow };
-    });
-    ctx.save();
-    ctx.globalAlpha = 0.25 + 0.75 * t;
-    ctx.beginPath();
-    ctx.moveTo(pts[0].x, pts[0].y);
-    for (let i = 1; i < 4; i++) ctx.lineTo(pts[i].x, pts[i].y);
-    ctx.closePath();
-    ctx.fillStyle = "rgba(255, 192, 97, 0.1)";
-    ctx.fill();
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.9)";
-    ctx.stroke();
-
-    // corner brackets, like the viewfinder's "locked on" language
-    const bracket = Math.min(34, Math.max(16, Math.min(dw, dh) * 0.09));
-    ctx.lineWidth = 4;
-    ctx.lineCap = "round";
-    ctx.strokeStyle = "#ffc061";
-    for (let i = 0; i < 4; i++) {
-      const p = pts[i];
-      const prev = pts[(i + 3) % 4];
-      const next = pts[(i + 1) % 4];
-      const unit = (q: { x: number; y: number }) => {
-        const len = Math.hypot(q.x - p.x, q.y - p.y) || 1;
-        return { x: (q.x - p.x) / len, y: (q.y - p.y) / len };
-      };
-      const a = unit(prev);
-      const b = unit(next);
-      ctx.beginPath();
-      ctx.moveTo(p.x + a.x * bracket, p.y + a.y * bracket);
-      ctx.lineTo(p.x, p.y);
-      ctx.lineTo(p.x + b.x * bracket, p.y + b.y * bracket);
-      ctx.stroke();
-    }
-    ctx.restore();
+  if (props.phase === "found" && props.extra) {
+    const t = prefersReducedMotion() ? 1 : Math.min(1, (performance.now() - phaseStart) / 280);
+    drawQuad(ctx, sx, props.extra, t, "rgba(255, 255, 255, 0.55)");
   }
+
+  if (props.phase === "found" && props.found) {
+    const t = prefersReducedMotion() ? 1 : Math.min(1, (performance.now() - phaseStart) / 280);
+    drawQuad(ctx, sx, props.found, t, "#ffc061");
+  }
+}
+
+/**
+ * One found sheet: a soft wash, a hairline, and four amber brackets — the same
+ * "locked on" language as the viewfinder, so the reveal needs no explaining.
+ */
+function drawQuad(
+  ctx: CanvasRenderingContext2D,
+  sx: (p: { x: number; y: number }) => { x: number; y: number },
+  quad: Quad,
+  t: number,
+  bracketColor: string
+): void {
+  const grow = 1 + (1 - t) * 0.06;
+  const pts = quad.map((p) => sx(p));
+  const cx = pts.reduce((sum, p) => sum + p.x, 0) / 4;
+  const cy = pts.reduce((sum, p) => sum + p.y, 0) / 4;
+  const scaled = pts.map((p) => ({ x: cx + (p.x - cx) * grow, y: cy + (p.y - cy) * grow }));
+
+  ctx.save();
+  ctx.globalAlpha = 0.25 + 0.75 * t;
+  ctx.beginPath();
+  ctx.moveTo(scaled[0].x, scaled[0].y);
+  for (let i = 1; i < 4; i++) ctx.lineTo(scaled[i].x, scaled[i].y);
+  ctx.closePath();
+  ctx.fillStyle = "rgba(255, 192, 97, 0.1)";
+  ctx.fill();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.9)";
+  ctx.stroke();
+
+  const span = Math.hypot(scaled[1].x - scaled[0].x, scaled[1].y - scaled[0].y);
+  const bracket = Math.min(34, Math.max(14, span * 0.16));
+  ctx.lineWidth = 4;
+  ctx.lineCap = "round";
+  ctx.strokeStyle = bracketColor;
+  for (let i = 0; i < 4; i++) {
+    const p = scaled[i];
+    const prev = scaled[(i + 3) % 4];
+    const next = scaled[(i + 1) % 4];
+    const unit = (q: { x: number; y: number }) => {
+      const len = Math.hypot(q.x - p.x, q.y - p.y) || 1;
+      return { x: (q.x - p.x) / len, y: (q.y - p.y) / len };
+    };
+    const a = unit(prev);
+    const b = unit(next);
+    ctx.beginPath();
+    ctx.moveTo(p.x + a.x * bracket, p.y + a.y * bracket);
+    ctx.lineTo(p.x, p.y);
+    ctx.lineTo(p.x + b.x * bracket, p.y + b.y * bracket);
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 
 /* -------------------------------------------------------------- animation */
@@ -223,7 +245,9 @@ watch(() => props.src, draw);
         <Icon name="close" :size="19" />
         <span>Discard</span>
       </button>
-      <span class="review-count">{{ props.pageCount > 0 ? `${props.pageCount} scanned` : "New scan" }}</span>
+      <span class="review-count">
+        {{ props.pageCount > 0 ? `Page ${props.pageCount + 1}` : "First page" }}
+      </span>
       <span class="review-spacer" />
     </header>
 
@@ -236,6 +260,24 @@ watch(() => props.src, draw);
         <strong>{{ title }}</strong>
         <span>{{ subtitle }}</span>
       </p>
+
+      <template v-if="asking">
+        <button class="choice primary" @click="emit('both')">
+          <span class="choice-icon"><Icon name="image" :size="22" /></span>
+          <span class="choice-text">
+            <strong>Scan both pages</strong>
+            <small>Two pages out of this one photo</small>
+          </span>
+        </button>
+
+        <button class="choice" @click="emit('single')">
+          <span class="choice-icon"><Icon name="crop" :size="22" /></span>
+          <span class="choice-text">
+            <strong>Just the first one</strong>
+            <small>Straighten the page on the left</small>
+          </span>
+        </button>
+      </template>
 
       <template v-if="showChoices">
         <button class="choice primary" :disabled="props.busy" @click="emit('auto')">

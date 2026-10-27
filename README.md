@@ -68,15 +68,33 @@ camera frame — desk, shadow, skew. After is what the export produces with
   it and leave a convincing last frame behind. The viewfinder measures whether
   frames are actually arriving, restarts the stream when the app comes back,
   and offers *Preview paused — tap to restart* if even that fails.
+- **Your pages survive a reload.** They are kept in IndexedDB as JPEG blobs plus
+  the crop, the look and the rotation — the pixels come back when you open a
+  page, so a twenty-page session costs one database read at launch, not a twenty
+  second wait. Nothing is uploaded, and *Clear* wipes it.
 - **Multi-page PDF** at up to 3000px per page — A4, US Letter, or a page that
   matches the scan exactly — with the file name typed in the app before saving.
+  On a phone *Share* hands the PDF straight to the share sheet; the download is
+  the fallback, not the plan.
+- **Turn, reorder, fix.** A quarter turn lives in the header next to *Crop*;
+  pages in the grid drag into another slot by their grip (or move with the arrow
+  keys when focused); removing a page is undoable for six seconds.
+- **Tap to focus** in the viewfinder, plus an opt-in *Auto* shutter that fires
+  once the outline has held still for most of a second — for when the phone is
+  propped up and both hands are busy with the book.
+- **Two pages in one photo** (an open book, two receipts): the detector looks
+  for a second, non-overlapping sheet and, when it finds one, the review sheet
+  shows both outlines and asks *Scan both pages* or *Just the first one*.
 - **Pinch to zoom in the viewfinder**, with 0.5× / 1× / 2× chips and a switch to
   the ultra-wide lens when the phone exposes one. Everywhere else the app holds
   pinch-to-zoom shut, because it only ever fights the user.
 - **Light on first load.** jsPDF and its dependencies (~370 kB) are only
   downloaded when a PDF is actually saved; the app itself is 53 kB gzipped.
 - **Installable** — a real PWA with an offline shell. Add it to the home screen
-  and it keeps working with no network at all.
+  and it keeps working with no network at all. The service worker's cache name
+  is stamped with the build (`vite.config.ts`), so a deploy throws the old shell
+  away instead of serving it forever, and its runtime cache is capped at 60
+  entries so hashed bundles cannot accumulate.
 
 ## Mobile first
 
@@ -113,7 +131,10 @@ light is never even. So `enhance()` works in this order:
    speckle.
 
 Imports are read at up to 3600px, exports at 3000px, and neither is ever scaled
-above what the photo actually contains.
+above what the photo actually contains. Anything that would exceed 8 megapixels
+or 4096px on a side is rendered a little smaller on purpose: past those numbers
+iOS Safari hands back a blank canvas instead of an error, and a blank page in a
+PDF is worse than a page that is 20% smaller.
 
 The editor renders its preview at about 1.35× the pixel size of the canvas it
 draws into, and never beyond ~1.6× the page's own resolution. That ratio is the
@@ -169,12 +190,15 @@ src/components/   CameraView, CaptureReview, EditorView, CornerEditor, PagesView
 src/lib/cv.ts     detection, homography warp, enhancement — no dependencies
 src/lib/pdf.ts    jsPDF layout; fitOnPage is pure and unit-tested
 src/lib/store.ts  pages, options, the preview/export resolution budgets
+src/lib/storage.ts IndexedDB (with an in-memory twin the tests drive)
+src/lib/share.ts  the share sheet, and the download it falls back to
 src/lib/fit.ts    the UI scale that undoes a browser's desktop-mode shrink
 scripts/          test-cv.ts (real pipeline), check-dist.mjs (deploy guard)
 ```
 
 Nothing in `src/lib` touches the network. The service worker only caches the
 app's own files, which is why "works offline" is a property and not a promise.
+The only thing that leaves the device is a PDF the user explicitly shares.
 
 ## Tests
 
@@ -241,13 +265,17 @@ takes a drag with the magnifier following the pointer, `Escape` goes back to the
 camera, and the desktop browser gets the same UI in a phone-sized frame (that
 frame is a `(hover: hover) and (pointer: fine)` rule, never a mobile layout).
 
+The four corners are also four real buttons sitting invisibly on top of the
+drawn handles: Tab reaches them, the arrow keys move the focused corner by a
+pixel (ten with Shift / Cmd), and the canvas draws the ring so you can see what
+has focus. The page grips in the grid take arrow keys the same way.
+
 ## Roadmap
 
 - OCR layer (tesseract.js) so exported PDFs are searchable
-- Drag to reorder pages in the filmstrip
-- Batch split: several receipts in one photo
 - Share-target on mobile (receive photos from other apps)
 - Optional signature and redaction tools
+- Per-page paper size, for the mixed-size scan
 
 ## License
 

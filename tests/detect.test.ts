@@ -1,11 +1,30 @@
 import { describe, expect, it } from "vitest";
-import { detectPageQuad, type Quad } from "../src/lib/cv";
+import { detectPageQuad, detectPageQuads, type Quad } from "../src/lib/cv";
 import { quadError, renderScene, rotatedRect } from "./scene";
 import { installDomStubs } from "./setup";
 
 installDomStubs();
 
 const asQuad = (q: Quad) => q as unknown as [{ x: number; y: number }, { x: number; y: number }, { x: number; y: number }, { x: number; y: number }];
+
+describe("two sheets in one photo", () => {
+  const left = rotatedRect(240, 350, 300, 420, -4);
+  const right = rotatedRect(660, 350, 300, 420, 6);
+
+  it("finds both pages instead of only the better one", () => {
+    const scene = renderScene({ corners: left, extra: [right], paper: 230, desk: 88, deskWarmth: 30 });
+    const quads = detectPageQuads(scene);
+    expect(quads.length).toBe(2);
+    // whichever order they come in, both sheets are there
+    const errors = quads.map((q) => Math.min(quadError(left, asQuad(q)), quadError(right, asQuad(q))));
+    expect(Math.max(...errors)).toBeLessThan(40);
+  });
+
+  it("does not invent a second page out of one sheet", () => {
+    const single = renderScene({ corners: rotatedRect(450, 350, 330, 440, -5), paper: 228, desk: 84 });
+    expect(detectPageQuads(single).length).toBe(1);
+  });
+});
 
 describe("page detection on synthetic scenes", () => {
   it("finds a portrait sheet on a dark desk", () => {

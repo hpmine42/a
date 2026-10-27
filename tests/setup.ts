@@ -120,6 +120,14 @@ export function installDomStubs() {
 
   HTMLCanvasElement.prototype.toDataURL = () => "data:image/jpeg;base64,AAAA";
 
+  // no encoder in jsdom: hand back a tiny blob so the persistence path runs
+  HTMLCanvasElement.prototype.toBlob = function (
+    this: HTMLCanvasElement,
+    callback: BlobCallback
+  ) {
+    callback(new Blob(["jpeg"], { type: "image/jpeg" }));
+  } as unknown as typeof HTMLCanvasElement.prototype.toBlob;
+
   class RO {
     observe() {}
     unobserve() {}

@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 import App from "../src/App.vue";
-import { clearPages, scan } from "../src/lib/store";
+import { clearPages, flushSave, scan } from "../src/lib/store";
+import { memoryStore, useProjectStore } from "../src/lib/storage";
 import { allowCamera, denyCamera, installDomStubs } from "./setup";
 
 installDomStubs();
@@ -56,6 +57,7 @@ async function choose(wrapper: VueWrapper, label: string) {
 }
 
 beforeEach(() => {
+  useProjectStore(null);
   clearPages();
   window.localStorage.clear();
   denyCamera();
@@ -237,6 +239,25 @@ describe("capture without a page", () => {
     wrapper.unmount();
   });
 
+  it("says which page this is, not just how many exist", async () => {
+    stubDemoFetch();
+    const wrapper = mount(App);
+    await tick(20);
+    await shootDemo(wrapper);
+    await choose(wrapper, "Crop it by hand");
+    await wrapper.find("button.crop-done").trigger("click");
+    await tick(400);
+    await wrapper.find("button.done").trigger("click");
+    await tick(200);
+
+    await wrapper.find(".page-add").trigger("click");
+    await tick(300);
+    await shootDemo(wrapper);
+
+    expect(wrapper.find(".review-count").text()).toContain("Page 2");
+    wrapper.unmount();
+  });
+
   it("does not blame detection for a photo that was uploaded", async () => {
     stubDemoFetch();
     const wrapper = mount(App);
@@ -335,6 +356,27 @@ describe("editor", () => {
     await button.trigger("click");
     await tick(400);
     expect(scan.pages[0].opts.optimize).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("turns the finished page a quarter at a time", async () => {
+    stubDemoFetch();
+    const wrapper = mount(App);
+    await tick(20);
+    await shootDemo(wrapper);
+    await choose(wrapper, "Crop it by hand");
+    await wrapper.find("button.crop-done").trigger("click");
+    await tick(500);
+
+    const rotate = wrapper.find('.editor-actions button[aria-label="Rotate this page a quarter turn"]');
+    expect(rotate.exists()).toBe(true);
+
+    const before = scan.pages[0].rotation;
+    await rotate.trigger("click");
+    await tick(400);
+    expect(scan.pages[0].rotation).toBe((before + 90) % 360);
+    // the render is redone, not just flagged
+    expect(scan.pages[0].result).toBeTruthy();
     wrapper.unmount();
   });
 
@@ -487,6 +529,26 @@ describe("pages", () => {
     wrapper.unmount();
   });
 
+  it("offers a grip to reorder pages, and no share button without a share sheet", async () => {
+    stubDemoFetch();
+    const wrapper = mount(App);
+    await tick(20);
+    await shootDemo(wrapper);
+    await choose(wrapper, "Crop it by hand");
+    await finish(wrapper);
+    await wrapper.find(".page-add").trigger("click");
+    await tick(300);
+    await shootDemo(wrapper);
+    await choose(wrapper, "Crop it by hand");
+    await finish(wrapper);
+
+    expect(wrapper.find(".page-grip").exists()).toBe(true);
+    expect(wrapper.find(".page-add").text()).toContain("Add page");
+    // jsdom has no navigator.share: promising a share sheet would be a lie
+    expect(wrapper.find("button.share-pdf").exists()).toBe(false);
+    wrapper.unmount();
+  });
+
   it("explains the empty grid instead of leaving a lonely plus", async () => {
     stubDemoFetch();
     const wrapper = mount(App);
@@ -586,5 +648,36 @@ describe("installed app", () => {
 
     expect(wrapper.find(".install-bar").exists()).toBe(false);
     wrapper.unmount();
+  });
+});
+
+describe("coming back to the app", () => {
+  it("puts last session's pages on screen after a reload", async () => {
+    useProjectStore(memoryStore());
+    stubDemoFetch();
+
+    const first = mount(App);
+    await tick(20);
+    await shootDemo(first);
+    await choose(first, "Crop it by hand");
+    await finish(first);
+    await tick(200);
+    await flushSave();
+    first.unmount();
+
+    // the tab was closed: memory is gone, the device is not
+    scan.pages.splice(0, scan.pages.length);
+    scan.activeId = 0;
+
+    const second = mount(App);
+    await tick(250);
+
+    // the app itself did the restoring, not this test
+    expect(scan.pages.length).toBe(1);
+    expect(scan.pages[0].name).toBe("scan");
+    // the filmstrip offer is there, so the pages are visibly back
+    expect(second.find(".stack").exists()).toBe(true);
+    second.unmount();
+    useProjectStore(null);
   });
 });

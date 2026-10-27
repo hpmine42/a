@@ -19,6 +19,10 @@ const emit = defineEmits<{
 const host = ref<HTMLDivElement | null>(null);
 const canvas = ref<HTMLCanvasElement | null>(null);
 const hovering = ref(false);
+/** Which corner the keyboard is on (null = none), for arrow-key nudging. */
+const focused = ref<number | null>(null);
+/** Where the four handles are on screen, so the real buttons sit on them. */
+const handlePts = ref<Pt[]>([]);
 
 let ctx: CanvasRenderingContext2D | null = null;
 let observer: ResizeObserver | null = null;
@@ -193,8 +197,9 @@ function render() {
   }
 
   // handles
+  handlePts.value = pts;
   pts.forEach((p, i) => {
-    const active = drag?.kind === "corner" && drag.index === i;
+    const active = (drag?.kind === "corner" && drag.index === i) || focused.value === i;
     g.beginPath();
     g.arc(p.x, p.y, active ? HANDLE_R + 3 : HANDLE_R, 0, Math.PI * 2);
     g.fillStyle = "rgba(10, 11, 13, 0.55)";
@@ -279,6 +284,42 @@ function drawLoupe(handle: Pt, f: Fit, w: number, h: number) {
     g.stroke();
   }
   g.restore();
+}
+
+/* --------------------------------------------------------------- keyboard */
+
+/**
+ * The same four handles, reachable without a finger.
+ *
+ * A canvas is invisible to assistive technology and impossible to nudge with a
+ * keyboard, which is a poor excuse for making precise work mouse-only. Invisible
+ * buttons sit exactly on the handles; Tab reaches them, arrows move them by a
+ * pixel (ten with Shift), and the canvas draws the ring so the focus is visible.
+ */
+function nudge(index: number, dx: number, dy: number): void {
+  const next = props.quad.map((p) => ({ ...p })) as Quad;
+  const clampX = (v: number) => Math.max(0, Math.min(props.src.width, v));
+  const clampY = (v: number) => Math.max(0, Math.min(props.src.height, v));
+  next[index] = { x: clampX(next[index].x + dx), y: clampY(next[index].y + dy) };
+  emit("update:quad", next);
+  markDirty();
+}
+
+function onHandleKey(index: number, event: KeyboardEvent): void {
+  const step = event.shiftKey ? 10 : 1;
+  const moves: Record<string, [number, number]> = {
+    ArrowLeft: [-step, 0],
+    ArrowRight: [step, 0],
+    ArrowUp: [0, -step],
+    ArrowDown: [0, step],
+  };
+  const move = moves[event.key];
+  if (!move) {
+    if (event.key === "Enter" || event.key === " ") emit("commit");
+    return;
+  }
+  event.preventDefault();
+  nudge(index, move[0], move[1]);
 }
 
 /* ------------------------------------------------------------------ input */
@@ -384,5 +425,19 @@ watch(
       @pointerup="pointerUp"
       @pointercancel="pointerUp"
     />
+    <!-- four real targets on top of the drawn handles: Tab reaches them,
+         arrow keys nudge them, and the canvas shows which one has focus -->
+    <div class="corner-handles" role="group" aria-label="Page corners">
+      <button
+        v-for="(pt, i) in handlePts"
+        :key="i"
+        class="corner-handle"
+        :style="{ left: `${pt.x}px`, top: `${pt.y}px` }"
+        :aria-label="`${['Top left', 'Top right', 'Bottom right', 'Bottom left'][i]} corner`"
+        @focus="focused = i"
+        @blur="focused = null"
+        @keydown="onHandleKey(i, $event)"
+      />
+    </div>
   </div>
 </template>

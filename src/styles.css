@@ -456,6 +456,55 @@ img {
 
 /* The preview is showing its last frame and nothing brings it back by itself:
    say so, and make the fix one tap. */
+/* Tap to focus: a ring that appears where the finger was, and fades */
+.focus-ring {
+  position: absolute;
+  width: calc(74px * var(--u));
+  height: calc(74px * var(--u));
+  margin: calc(-37px * var(--u)) 0 0 calc(-37px * var(--u));
+  border-radius: 50%;
+  border: 2px solid rgba(255, 214, 152, 0.95);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25), 0 0 22px rgba(255, 192, 97, 0.35);
+  pointer-events: none;
+  animation: focus-pop 0.9s var(--ease) forwards;
+}
+
+@keyframes focus-pop {
+  0% {
+    transform: scale(1.35);
+    opacity: 0;
+  }
+  18% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  70% {
+    opacity: 1;
+  }
+  100% {
+    transform: scale(0.92);
+    opacity: 0;
+  }
+}
+
+/* "4 pages from last time": one line over the preview, so nothing on screen
+   moves when it goes away */
+.restored-chip {
+  position: absolute;
+  top: calc(78px * var(--u));
+  left: 50%;
+  transform: translateX(-50%);
+  margin: 0;
+  padding: calc(7px * var(--u)) calc(14px * var(--u));
+  z-index: 3;
+  border-radius: 999px;
+  font-size: calc(12.5px * var(--u));
+  font-weight: 600;
+  color: rgba(255, 214, 152, 0.95);
+  background: rgba(255, 192, 97, 0.12);
+  border: 1px solid rgba(255, 192, 97, 0.28);
+}
+
 .camera-frozen {
   position: absolute;
   z-index: 4;
@@ -1004,7 +1053,33 @@ img {
 
 /* "No page edge found": one short nudge, then still. Enough to be felt, not
    enough to be a show. */
-.corner-editor.missed .corner-canvas {
+.corner-editor.missed /* Invisible on purpose: the canvas draws the rings. These exist so a keyboard
+   and a screen reader can reach the four corners at all. */
+.corner-handles {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.corner-handle {
+  position: absolute;
+  width: calc(44px * var(--u));
+  height: calc(44px * var(--u));
+  margin: calc(-22px * var(--u)) 0 0 calc(-22px * var(--u));
+  border-radius: 50%;
+  background: none;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.corner-handle:focus-visible {
+  opacity: 1;
+  outline: 2px solid rgba(255, 192, 97, 0.9);
+  outline-offset: calc(9px * var(--u));
+}
+
+.corner-canvas {
   animation: corner-miss 0.4s var(--ease);
 }
 
@@ -1022,6 +1097,32 @@ img {
   70% {
     transform: translateX(-3px);
   }
+}
+
+/* Invisible on purpose: the canvas draws the rings. These exist so a keyboard
+   and a screen reader can reach the four corners at all. */
+.corner-handles {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.corner-handle {
+  position: absolute;
+  width: calc(44px * var(--u));
+  height: calc(44px * var(--u));
+  margin: calc(-22px * var(--u)) 0 0 calc(-22px * var(--u));
+  border-radius: 50%;
+  background: none;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.corner-handle:focus-visible {
+  opacity: 1;
+  outline: 2px solid rgba(255, 192, 97, 0.9);
+  outline-offset: calc(9px * var(--u));
 }
 
 .corner-canvas {
@@ -1110,6 +1211,37 @@ img {
 .crop-done {
   width: 100%;
   height: var(--tap-lg);
+}
+
+/* Rotate and Crop travel together: both are corrections to the page, not
+   decisions about it, so they live in the header and leave the dock to
+   Optimize and Done. */
+.editor-actions {
+  display: flex;
+  align-items: center;
+  gap: calc(8px * var(--u));
+}
+
+.editor-actions .control {
+  color: var(--muted);
+}
+
+.editor-actions .control:hover {
+  color: var(--text);
+}
+
+/* A 360px phone cannot hold three labelled chips: the icons carry it, and the
+   labels come back the moment there is room. */
+@media (max-width: 400px) {
+  .editor-actions .control span {
+    display: none;
+  }
+
+  .editor-actions .control {
+    width: var(--tap);
+    padding: 0;
+    justify-content: center;
+  }
 }
 
 /* Keeps the counter in the header centred when the crop chip is not there. */
@@ -1408,6 +1540,52 @@ img {
 
 /* Sits *inside* the thumbnail corner: a badge hanging outside the card gets
    clipped by the scrolling grid, which read as a cut-off close button. */
+/* Reorder handle: bottom-right, out of the way of the close button, and big
+   enough for a thumb even though the dots are small. */
+.page-grip {
+  position: absolute;
+  right: calc(4px * var(--u));
+  bottom: calc(4px * var(--u));
+  display: grid;
+  place-items: center;
+  width: calc(42px * var(--u));
+  height: calc(42px * var(--u));
+  border-radius: 50%;
+  color: rgba(255, 255, 255, 0.9);
+  background: rgba(12, 14, 18, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  backdrop-filter: blur(8px);
+  touch-action: none;
+  cursor: grab;
+}
+
+.page-grip:focus-visible {
+  outline: 2px solid var(--amber);
+  outline-offset: 2px;
+}
+
+.page-card.dragging {
+  opacity: 0.55;
+}
+
+.page-card.dragging .page-thumb {
+  transform: scale(0.96);
+  border-color: rgba(255, 192, 97, 0.55);
+}
+
+/* Where the page would land: a slot, not a jump */
+.page-card.drop-before::before {
+  content: "";
+  position: absolute;
+  top: calc(-5px * var(--u));
+  left: calc(4px * var(--u));
+  right: calc(4px * var(--u));
+  height: calc(4px * var(--u));
+  border-radius: 999px;
+  background: var(--amber);
+  box-shadow: 0 0 14px rgba(255, 192, 97, 0.7);
+}
+
 .page-del {
   position: absolute;
   top: calc(6px * var(--u));
@@ -1436,8 +1614,11 @@ img {
 }
 
 .page-add {
-  display: grid;
-  place-items: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: calc(8px * var(--u));
   width: 100%;
   aspect-ratio: 3 / 4;
   border-radius: calc(14px * var(--u));
@@ -1446,6 +1627,12 @@ img {
   border: 1.5px dashed rgba(255, 255, 255, 0.14);
   transition: color 0.15s var(--ease), border-color 0.15s var(--ease),
     background 0.15s var(--ease);
+}
+
+.page-add span {
+  font-size: calc(12.5px * var(--u));
+  font-weight: 600;
+  letter-spacing: 0.01em;
 }
 
 .page-add:hover {
@@ -1569,9 +1756,52 @@ img {
   color: var(--danger);
 }
 
+.export-row {
+  display: flex;
+  gap: calc(10px * var(--u));
+  align-items: stretch;
+}
+
+.share-pdf {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: calc(8px * var(--u));
+  flex: 0 0 auto;
+  height: var(--tap-lg);
+  padding: 0 calc(20px * var(--u));
+  border-radius: calc(18px * var(--u));
+  font-size: calc(15px * var(--u));
+  font-weight: 600;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--line-strong);
+  transition: background 0.18s var(--ease), transform 0.12s var(--ease);
+}
+
+.share-pdf:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.share-pdf:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.share-pdf:disabled {
+  opacity: 0.5;
+}
+
+.pages-result {
+  margin: 0 0 8px;
+  font-size: calc(13px * var(--u));
+  text-align: center;
+  color: var(--amber);
+}
+
 .save {
   position: relative;
   overflow: hidden;
+  flex: 1 1 auto;
   display: flex;
   align-items: center;
   justify-content: center;

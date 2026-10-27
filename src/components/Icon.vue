@@ -15,7 +15,10 @@ export type IconName =
   | "plus"
   | "image"
   | "camera"
-  | "sparkle";
+  | "sparkle"
+  | "rotate"
+  | "share"
+  | "grip";
 </script>
 
 <template>
@@ -91,6 +94,23 @@ export type IconName =
     <template v-else-if="name === 'camera'">
       <path d="M3 8.5A2.5 2.5 0 0 1 5.5 6h1.7l1-1.6A1.5 1.5 0 0 1 9.5 3.7h5a1.5 1.5 0 0 1 1.3.7l1 1.6h1.7A2.5 2.5 0 0 1 21 8.5v8A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5v-8z" />
       <circle cx="12" cy="12.4" r="3.4" />
+    </template>
+    <template v-else-if="name === 'rotate'">
+      <path d="M20 12a8 8 0 1 1-2.6-5.9" />
+      <path d="M20 4.4V9h-4.6" />
+    </template>
+    <template v-else-if="name === 'share'">
+      <path d="M12 15.5V4" />
+      <path d="M8.4 7.6L12 4l3.6 3.6" />
+      <path d="M5 13.5v5A1.5 1.5 0 0 0 6.5 20h11a1.5 1.5 0 0 0 1.5-1.5v-5" />
+    </template>
+    <template v-else-if="name === 'grip'">
+      <circle cx="9.5" cy="7" r="1.25" />
+      <circle cx="14.5" cy="7" r="1.25" />
+      <circle cx="9.5" cy="12" r="1.25" />
+      <circle cx="14.5" cy="12" r="1.25" />
+      <circle cx="9.5" cy="17" r="1.25" />
+      <circle cx="14.5" cy="17" r="1.25" />
     </template>
     <template v-else-if="name === 'plus'">
       <path d="M12 5v14M5 12h14" />

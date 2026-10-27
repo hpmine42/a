@@ -14,7 +14,7 @@ import {
 import { tap, thump } from "../lib/haptics";
 import { IMPORT_MAX } from "../lib/store";
 
-const props = defineProps<{ thumbs: string[]; pageCount: number }>();
+const props = defineProps<{ thumbs: string[]; pageCount: number; restored?: number }>();
 const emit = defineEmits<{
   (
     e: "captured",
@@ -122,9 +122,40 @@ const lastReqId = ref(0);
 /** The preview stopped producing frames and nothing brought it back. */
 const frozen = ref(false);
 
+/* ------------------------------------------------------------- auto shutter */
+
+/** Take the photo once the outline has sat still. Opt-in, and only meaningful
+ *  with detection on — otherwise there is no outline to wait for. */
+const AUTO_SHOT_KEY = "scano.autoshot";
+const autoShot = ref(false);
+/** When the outline last started being still (0 = not still). */
+let stableSince = 0;
+let lastAutoAt = 0;
+let capturing = false;
+/** How far the outline may wander and still count as "held still". */
+function stillEnough(prev: Quad | null, next: Quad | null): boolean {
+  if (!prev || !next) return false;
+  const v = video.value;
+  const span = v?.videoWidth ? Math.hypot(v.videoWidth, v.videoHeight) : 1000;
+  const drift = next.reduce((sum, p, i) => sum + Math.hypot(p.x - prev[i].x, p.y - prev[i].y), 0) / 4;
+  return drift < span * 0.012;
+}
+
+function rememberedAuto(): boolean {
+  try {
+    return window.localStorage.getItem(AUTO_SHOT_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
 /* ------------------------------------------------------------------ camera */
 
-async function startStream(mode: "environment" | "user", deviceId?: string) {
+async function startStream(mode: "environment" | "user", deviceId?: string, keepView = false) {
+  // A restart must not silently undo the setup: a torch that was on, and the
+  // zoom the user picked, are part of what they were looking at.
+  const restoreLight = keepView && torchOn.value;
+  const restoreZoom = keepView ? zoom.value * softZoom.value : 1;
   stopStream();
   error.value = null;
   try {
@@ -165,6 +196,17 @@ async function startStream(mode: "environment" | "user", deviceId?: string) {
   zoomCaps.value = z ? { min: z.min ?? 1, max: z.max ?? 1, step: z.step ?? 0.1 } : null;
   zoom.value = 1;
   softZoom.value = 1;
+
+  if (restoreLight && torchAvailable.value) {
+    try {
+      await track?.applyConstraints({ advanced: [{ torch: true } as MediaTrackConstraintSet] });
+      torchOn.value = true;
+    } catch {
+      torchAvailable.value = false;
+    }
+  }
+  if (restoreZoom > 1.01) await applyZoom(restoreZoom);
+
   void findUltraWide();
 }
 
@@ -247,7 +289,7 @@ async function ensureLive(force = false) {
   resuming = true;
   try {
     const device = usingUltra.value ? ultraId.value ?? undefined : mainDeviceId ?? undefined;
-    await startStream(facing.value, device);
+    await startStream(facing.value, device, true);
     if (ready.value) {
       stampFrame();
       watchFrames(el);
@@ -362,6 +404,45 @@ async function flipCamera() {
 const pointers = new Map<number, { x: number; y: number }>();
 let pinchStart = 0;
 let pinchBase = 1;
+/** Where the last tap landed, in stage pixels — the ring that says "focusing". */
+const focusPoint = ref<{ x: number; y: number } | null>(null);
+let focusTimer = 0;
+let tapStart = { x: 0, y: 0, at: 0 };
+
+/**
+ * Tap to focus.
+ *
+ * Autofocus on a phone picks the middle of a desk edge more often than the
+ * paper, and a sharp page is the whole product. `pointsOfInterest` is not
+ * implemented everywhere, so this is best-effort: the ring always appears
+ * (so the tap never feels ignored), the constraint is applied where it works.
+ */
+async function focusAt(clientX: number, clientY: number) {
+  const el = stage.value;
+  if (!el) return;
+  const rect = el.getBoundingClientRect();
+  const x = clientX - rect.left;
+  const y = clientY - rect.top;
+  focusPoint.value = { x, y };
+  window.clearTimeout(focusTimer);
+  focusTimer = window.setTimeout(() => (focusPoint.value = null), 900);
+
+  const track = stream?.getVideoTracks()[0];
+  const caps = (track?.getCapabilities?.() ?? {}) as { focusMode?: string[] };
+  if (!track || !caps.focusMode?.length) return;
+  const map = coverRect();
+  if (!map) return;
+  const vx = Math.min(1, Math.max(0, (x - map.dx) / (video.value!.videoWidth * map.scale)));
+  const vy = Math.min(1, Math.max(0, (y - map.dy) / (video.value!.videoHeight * map.scale)));
+  const mode = caps.focusMode.includes("single-shot") ? "single-shot" : caps.focusMode[0];
+  try {
+    await track.applyConstraints({
+      advanced: [{ pointsOfInterest: [{ x: vx, y: vy }], focusMode: mode } as MediaTrackConstraintSet],
+    });
+  } catch {
+    /* the tap still showed the ring; nothing else to do */
+  }
+}
 
 function distance() {
   const [a, b] = [...pointers.values()];
@@ -370,6 +451,7 @@ function distance() {
 }
 
 function onPointerDown(event: PointerEvent) {
+  if (pointers.size === 0) tapStart = { x: event.clientX, y: event.clientY, at: performance.now() };
   pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
   if (pointers.size === 2) {
     pinchStart = distance();
@@ -389,6 +471,11 @@ function onPointerMove(event: PointerEvent) {
 function onPointerUp(event: PointerEvent) {
   pointers.delete(event.pointerId);
   if (pointers.size < 2) pinchStart = 0;
+  // a tap (not a pinch, not a swipe) means "focus here"
+  const moved = Math.hypot(event.clientX - tapStart.x, event.clientY - tapStart.y);
+  if (pointers.size === 0 && moved < 12 && performance.now() - tapStart.at < 350) {
+    void focusAt(event.clientX, event.clientY);
+  }
 }
 
 /* --------------------------------------------------------------- detection */
@@ -403,10 +490,14 @@ function ensureWorker() {
     const v = video.value;
     if (!quad || !v || !v.videoWidth) {
       target.value = null;
+      stableSince = 0;
       return;
     }
     const scale = v.videoWidth / small.width;
-    target.value = quad.map((p) => ({ x: p.x * scale, y: p.y * scale })) as Quad;
+    const next = quad.map((p) => ({ x: p.x * scale, y: p.y * scale })) as Quad;
+    // a still outline keeps its clock; a moving one restarts it
+    if (!stillEnough(target.value, next)) stableSince = performance.now();
+    target.value = next;
   };
 }
 
@@ -544,6 +635,16 @@ function draw() {
   }
 }
 
+/** Fire the shutter when the page has been held still long enough. */
+function maybeAutoShoot(now: number) {
+  if (!autoShot.value || !autoOn.value || !ready.value || capturing || frozen.value) return;
+  if (!target.value || !stableSince) return;
+  if (now - stableSince < 900 || now - lastAutoAt < 2400) return;
+  lastAutoAt = now;
+  stableSince = 0;
+  void capture();
+}
+
 function loop(now: number) {
   if (disposed) return;
   // A playing video advances currentTime every frame; a frozen one does not.
@@ -558,6 +659,7 @@ function loop(now: number) {
   if (!document.hidden) {
     scheduleDetection(now);
     draw();
+    maybeAutoShoot(now);
   }
   raf = requestAnimationFrame(loop);
 }
@@ -566,7 +668,8 @@ function loop(now: number) {
 
 async function capture() {
   const v = video.value;
-  if (!v || !v.videoWidth) return;
+  if (!v || !v.videoWidth || capturing) return;
+  capturing = true;
   thump();
   flash.value = true;
   window.setTimeout(() => (flash.value = false), 220);
@@ -590,6 +693,8 @@ async function capture() {
     emit("captured", { img: cropped, quad, auto: autoOn.value, origin: "camera" });
   } catch (err) {
     console.error("[scanner] capture failed", err);
+  } finally {
+    capturing = false;
   }
 }
 
@@ -642,6 +747,7 @@ let wakeTimer = 0;
 onMounted(async () => {
   ensureWorker();
   autoOn.value = rememberedDetect();
+  autoShot.value = rememberedAuto();
   unwatchInstall = watchInstallPrompt({
     onAvailable: () => (promptReady.value = true),
     onInstalled: () => {
@@ -680,6 +786,15 @@ onBeforeUnmount(() => {
   stopStream();
 });
 
+watch(autoShot, (on) => {
+  try {
+    window.localStorage.setItem(AUTO_SHOT_KEY, on ? "1" : "0");
+  } catch {
+    /* private mode: the switch simply forgets */
+  }
+  if (!on) stableSince = 0;
+});
+
 watch(autoOn, (on) => {
   try {
     window.localStorage.setItem(DETECT_KEY, on ? "1" : "0");
@@ -689,6 +804,7 @@ watch(autoOn, (on) => {
   if (!on) {
     target.value = null;
     eased.value = null;
+    stableSince = 0;
   }
 });
 </script>
@@ -722,6 +838,18 @@ watch(autoOn, (on) => {
           >
             <Icon name="auto" :size="19" />
             <span>Detect</span>
+          </button>
+
+          <button
+            v-if="autoOn"
+            class="control"
+            :class="{ on: autoShot }"
+            :aria-pressed="autoShot"
+            aria-label="Take the photo automatically once the page holds still"
+            @click="autoShot = !autoShot"
+          >
+            <Icon name="camera" :size="19" />
+            <span>Auto</span>
           </button>
 
           <button
@@ -764,6 +892,17 @@ watch(autoOn, (on) => {
         </button>
         <span class="zoom-value" aria-live="polite">{{ zoomLabel }}</span>
       </div>
+
+      <p v-if="props.restored" class="restored-chip" role="status">
+        {{ props.restored === 1 ? "1 page" : `${props.restored} pages` }} from last time
+      </p>
+
+      <div
+        v-if="focusPoint"
+        class="focus-ring"
+        :style="{ left: `${focusPoint.x}px`, top: `${focusPoint.y}px` }"
+        aria-hidden="true"
+      />
 
       <button v-if="frozen && ready" class="camera-frozen" @click="rewake">
         <Icon name="camera" :size="18" />
@@ -850,10 +989,12 @@ watch(autoOn, (on) => {
 
     <p class="camera-hint">
       <span class="live-dot" :class="{ on: autoOn && !!target }" aria-hidden="true" />
-      <template v-if="autoOn && target">Page found — it will be used</template>
+      <template v-if="autoOn && target && autoShot">Page found — hold still, shooting</template>
+      <template v-else-if="autoOn && target">Page found — it will be used</template>
       <template v-else-if="autoOn">Looking for the page…</template>
       <template v-else>Point at a page and tap the shutter · pinch to zoom</template>
     </p>
+
 
     <input ref="fileInput" type="file" accept="image/*" multiple hidden @change="onFiles" />
   </div>
