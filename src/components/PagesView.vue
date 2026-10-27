@@ -118,6 +118,13 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.clearTimeout(undoTimer);
   window.clearTimeout(resultTimer);
+  // leaving mid-drag must not leave the auto-scroll loop (or the preview) alive
+  window.clearTimeout(settleTimer);
+  if (scrollRaf) cancelAnimationFrame(scrollRaf);
+  scrollRaf = 0;
+  drag = null;
+  ghost.value = null;
+  draggingId.value = null;
 });
 
 const finalName = computed(() => pdfFilename(scan.filename, scan.pages.length));
@@ -261,66 +268,226 @@ async function shareOut() {
  * would take. Only the page order is ever written, never the pixels.
  */
 const draggingId = ref<number | null>(null);
-const dropIndex = ref<number | null>(null);
 const grid = ref<HTMLDivElement | null>(null);
-let gripStart = { x: 0, y: 0, id: 0, from: 0 };
-let gripMoved = false;
+/** The card that follows the finger: a preview, not the page itself. */
+const ghost = ref<{
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  thumb: string;
+} | null>(null);
+/** The position the page is in *right now* — the badge follows the reorder. */
+const dragNum = computed(() => scan.pages.findIndex((p) => p.id === draggingId.value) + 1);
+/** Spoken, not shown: where a keyboard move just put the page. */
+const moveNote = ref("");
+/** Set for a moment after a drop, so the card settles instead of popping. */
+const settled = ref<number | null>(null);
+let settleTimer = 0;
 
-function onGripDown(event: PointerEvent, id: number, index: number) {
-  if (busy.value) return;
-  tap();
-  gripStart = { x: event.clientX, y: event.clientY, id, from: index };
-  gripMoved = false;
-  draggingId.value = id;
-  dropIndex.value = null;
-  (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
-  event.preventDefault();
+/**
+ * What a drag remembers.
+ *
+ * The slot centres are read once, when the finger goes down, and treated as
+ * fixed from then on. That is what makes the preview calm: the cards under the
+ * finger glide into their new places, while the geometry the finger is judged
+ * against never moves. Scrolling is folded in as a shift.
+ */
+type Drag = {
+  id: number;
+  /** Offset of the finger inside the card, so the preview does not jump. */
+  grabX: number;
+  grabY: number;
+  /** Where the finger went down, to tell a tap from a drag. */
+  downX: number;
+  downY: number;
+  w: number;
+  h: number;
+  slots: { x: number; y: number }[];
+  scrollStart: number;
+  /** The finger has travelled far enough to mean "move", not "tap". */
+  lifted: boolean;
+};
+let drag: Drag | null = null;
+/** Latest pointer position, so auto-scrolling can re-aim between moves. */
+let pointer = { x: 0, y: 0 };
+let scrollRaf = 0;
+
+/** How far a finger has to travel before a press becomes a drag. */
+const LIFT_SLOP = 6;
+/** How close to the edge of the grid the auto-scroll starts, before scaling. */
+const EDGE = 76;
+
+/** The same edge in device-independent pixels: `--u` is 1 on a normal phone. */
+function edgePx(): number {
+  const raw = getComputedStyle(document.documentElement).getPropertyValue("--u");
+  const u = parseFloat(raw);
+  return EDGE * (Number.isFinite(u) && u > 0 ? u : 1);
 }
 
+function gridEl(): HTMLElement | null {
+  const el = grid.value as unknown as { $el?: HTMLElement } | HTMLElement | null;
+  if (!el) return null;
+  return (el as { $el?: HTMLElement }).$el ?? (el as HTMLElement);
+}
+
+function cardEls(): HTMLElement[] {
+  const root = gridEl();
+  if (!root) return [];
+  return Array.from(root.querySelectorAll<HTMLElement>(".page-card"));
+}
+
+function slotCentres(): { x: number; y: number }[] {
+  return cardEls().map((card) => {
+    const rect = card.getBoundingClientRect();
+    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  });
+}
+
+/** Which slot the finger is closest to, in the geometry captured at pickup. */
 function slotUnder(x: number, y: number): number | null {
-  const cards = grid.value?.querySelectorAll<HTMLElement>(".page-card");
-  if (!cards?.length) return null;
+  if (!drag?.slots.length) return null;
+  const root = gridEl();
+  const shift = root ? root.scrollTop - drag.scrollStart : 0;
   let best: number | null = null;
   let bestDist = Infinity;
-  cards.forEach((card, index) => {
-    const rect = card.getBoundingClientRect();
-    const cx = rect.left + rect.width / 2;
-    const cy = rect.top + rect.height / 2;
-    // inside the card is an obvious answer; nearest centre is the tie-break
-    const dist = Math.hypot(x - cx, y - cy);
-    const inside = x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
-    const weighted = inside ? dist - 1e6 : dist;
-    if (weighted < bestDist) {
-      bestDist = weighted;
+  drag.slots.forEach((slot, index) => {
+    const dist = Math.hypot(x - slot.x, y - (slot.y - shift));
+    if (dist < bestDist) {
+      bestDist = dist;
       best = index;
     }
   });
   return best;
 }
 
+/**
+ * Put the page where the finger is, *while* the finger is still down.
+ *
+ * This is the difference between a drop marker and Google Keep: the grid
+ * rearranges under the drag, so what you see while dragging is what you get.
+ * `movePage` writes the order, `<TransitionGroup>` glides the cards that slide
+ * out of the way, and the dragged card itself is invisible — its slot is the gap
+ * the preview will drop into.
+ */
+function aim(): void {
+  if (!drag?.lifted) return;
+  const current = scan.pages.findIndex((p) => p.id === drag!.id);
+  if (current === -1) return;
+  const target = slotUnder(pointer.x, pointer.y);
+  if (target === null || target === current) return;
+  movePage(current, target);
+  tap();
+}
+
+/** Scroll the grid when the finger reaches an edge — twelve pages do not fit. */
+function autoScroll(): void {
+  if (!drag) {
+    scrollRaf = 0;
+    return;
+  }
+  const root = gridEl();
+  if (root && drag.lifted) {
+    const rect = root.getBoundingClientRect();
+    const edge = edgePx();
+    let step = 0;
+    if (pointer.y < rect.top + edge) step = -Math.ceil((rect.top + edge - pointer.y) / 3);
+    else if (pointer.y > rect.bottom - edge) step = Math.ceil((pointer.y - (rect.bottom - edge)) / 3);
+    if (step) {
+      root.scrollTop += Math.max(-24, Math.min(24, step));
+      aim();
+    }
+  }
+  scrollRaf = requestAnimationFrame(autoScroll);
+}
+
+function paintGhost(x: number, y: number): void {
+  if (!drag) return;
+  ghost.value = {
+    x: x - drag.grabX,
+    y: y - drag.grabY,
+    w: drag.w,
+    h: drag.h,
+    thumb: scan.pages.find((p) => p.id === drag!.id)?.thumb ?? "",
+  };
+}
+
+/**
+ * The same move, without a finger.
+ *
+ * Arrow keys on the grip reorder too — and say where the page went, because a
+ * screen reader does not see the card slide.
+ */
+function keyMove(index: number, delta: number): void {
+  const target = index + delta;
+  if (target < 0 || target >= scan.pages.length) return;
+  movePage(index, target);
+  tap();
+  moveNote.value = `Page moved to position ${target + 1} of ${scan.pages.length}`;
+}
+
+function onGripDown(event: PointerEvent, id: number) {
+  if (busy.value) return;
+  const card = (event.currentTarget as HTMLElement).closest<HTMLElement>(".page-card");
+  const rect = card?.getBoundingClientRect();
+  tap();
+  drag = {
+    id,
+    grabX: rect ? event.clientX - rect.left : 0,
+    grabY: rect ? event.clientY - rect.top : 0,
+    downX: event.clientX,
+    downY: event.clientY,
+    w: rect?.width ?? 0,
+    h: rect?.height ?? 0,
+    slots: slotCentres(),
+    scrollStart: gridEl()?.scrollTop ?? 0,
+    lifted: false,
+  };
+  pointer = { x: event.clientX, y: event.clientY };
+  draggingId.value = id;
+  try {
+    (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+  } catch {
+    /* capture is a nicety; the drag works without it */
+  }
+  event.preventDefault();
+}
+
 function onGripMove(event: PointerEvent) {
-  if (draggingId.value === null) return;
-  if (!gripMoved && Math.hypot(event.clientX - gripStart.x, event.clientY - gripStart.y) < 6) return;
-  gripMoved = true;
-  dropIndex.value = slotUnder(event.clientX, event.clientY);
+  if (!drag) return;
+  pointer = { x: event.clientX, y: event.clientY };
+  if (!drag.lifted) {
+    if (Math.hypot(event.clientX - drag.downX, event.clientY - drag.downY) < LIFT_SLOP) return;
+    drag.lifted = true;
+    thump();
+    if (!scrollRaf) scrollRaf = requestAnimationFrame(autoScroll);
+  }
+  paintGhost(event.clientX, event.clientY);
+  aim();
   event.preventDefault();
 }
 
 function onGripUp(event: PointerEvent) {
-  const id = draggingId.value;
-  const target = dropIndex.value;
+  const id = drag?.id ?? null;
+  const lifted = drag?.lifted ?? false;
+  drag = null;
+  ghost.value = null;
   draggingId.value = null;
-  dropIndex.value = null;
+  if (scrollRaf) {
+    cancelAnimationFrame(scrollRaf);
+    scrollRaf = 0;
+  }
   try {
     (event.currentTarget as HTMLElement).releasePointerCapture(event.pointerId);
   } catch {
     /* capture may already be gone */
   }
-  if (id === null || target === null || !gripMoved) return;
-  const from = scan.pages.findIndex((p) => p.id === gripStart.id);
-  if (from === -1 || from === target) return;
+  if (id === null || !lifted) return;
+  // The order is already what the finger chose; this is only the landing.
   thump();
-  movePage(from, target);
+  settled.value = id;
+  window.clearTimeout(settleTimer);
+  settleTimer = window.setTimeout(() => (settled.value = null), 180);
 }
 </script>
 
@@ -338,8 +505,13 @@ function onGripUp(event: PointerEvent) {
       </button>
     </header>
 
-    <div class="pages-grid" ref="grid">
-      <p v-if="!scan.pages.length" class="pages-empty">
+    <!--
+      TransitionGroup, so a reorder is a move rather than a jump: the cards that
+      slide out of the way are animated by the browser (FLIP), which is what makes
+      the live preview read as "it will land here" instead of "it flickered".
+    -->
+    <TransitionGroup name="card" tag="div" class="pages-grid" ref="grid">
+      <p v-if="!scan.pages.length" key="empty" class="pages-empty">
         <strong>No pages yet</strong>
         <span>Take a photo of a document. Nothing leaves this device.</span>
       </p>
@@ -350,7 +522,7 @@ function onGripUp(event: PointerEvent) {
         class="page-card"
         :class="{
           dragging: draggingId === page.id,
-          'drop-before': dropIndex === i && draggingId !== null && draggingId !== page.id,
+          settled: settled === page.id,
         }"
       >
         <button class="page-thumb" :aria-label="`Edit page ${i + 1}`" @click="emit('edit', page.id)">
@@ -360,14 +532,14 @@ function onGripUp(event: PointerEvent) {
         <button
           class="page-grip"
           :aria-label="`Reorder page ${i + 1}: drag, or use the arrow keys to move it`"
-          @pointerdown="onGripDown($event, page.id, i)"
+          @pointerdown="onGripDown($event, page.id)"
           @pointermove="onGripMove"
           @pointerup="onGripUp"
           @pointercancel="onGripUp"
-          @keydown.left.prevent="movePage(i, i - 1)"
-          @keydown.up.prevent="movePage(i, i - 1)"
-          @keydown.right.prevent="movePage(i, i + 1)"
-          @keydown.down.prevent="movePage(i, i + 1)"
+          @keydown.left.prevent="keyMove(i, -1)"
+          @keydown.up.prevent="keyMove(i, -1)"
+          @keydown.right.prevent="keyMove(i, 1)"
+          @keydown.down.prevent="keyMove(i, 1)"
         >
           <Icon name="grip" :size="16" />
         </button>
@@ -376,11 +548,31 @@ function onGripUp(event: PointerEvent) {
         </button>
       </figure>
 
-      <button class="page-add" aria-label="Add pages" @click="emit('add')">
+      <button key="add" class="page-add" aria-label="Add pages" @click="emit('add')">
         <Icon name="plus" :size="24" />
         <span>Add page</span>
       </button>
-    </div>
+    </TransitionGroup>
+
+    <!-- The card under the finger. Outside the grid (and outside its clipping),
+         so it can hang over the edges the way a held note does. -->
+    <Teleport to="body">
+      <div
+        v-if="ghost"
+        class="drag-ghost"
+        aria-hidden="true"
+        :style="{
+          width: `${ghost.w}px`,
+          height: `${ghost.h}px`,
+          transform: `translate3d(${ghost.x}px, ${ghost.y}px, 0) rotate(-1.4deg) scale(1.045)`,
+        }"
+      >
+        <img v-if="ghost.thumb" :src="ghost.thumb" alt="" />
+        <span class="drag-ghost-num">{{ dragNum }}</span>
+      </div>
+    </Teleport>
+
+    <p class="sr-live" role="status" aria-live="polite">{{ moveNote }}</p>
 
     <div v-if="undo" class="undo-bar" role="status" aria-live="polite">
       <span>{{ undo.label }}</span>
