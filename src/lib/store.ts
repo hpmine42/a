@@ -4,6 +4,7 @@ import {
   enhance,
   fullFrameQuad,
   insetQuad,
+  OPTIMIZE,
   outputSize,
   warp,
   type Mode,
@@ -228,7 +229,7 @@ export async function processPage(page: Page, opts: ProcessOptions = {}): Promis
 
   const upright = rotateImageData(page.warped, page.rotation / 90);
   page.result = page.opts.optimize
-    ? markRaw(enhance(upright, { mode: "bw", brightness: 0, contrast: 0, strength: 58 }))
+    ? markRaw(enhance(upright, OPTIMIZE))
     : upright;
   page.cacheKey = key;
   if (full) page.thumb = makeThumb(page.result);
@@ -248,7 +249,7 @@ function renderCopy(page: Page, maxSide: number): ImageData {
   const warped = warp(page.src, quad, size.w, size.h);
   const upright = rotateImageData(warped, page.rotation / 90);
   return page.opts.optimize
-    ? enhance(upright, { mode: "bw", brightness: 0, contrast: 0, strength: 58 })
+    ? enhance(upright, OPTIMIZE)
     : upright;
 }
 

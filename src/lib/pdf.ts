@@ -1,5 +1,5 @@
 import type { jsPDF as JsPdf } from "jspdf";
-import { enhance, outputSize, warp } from "./cv";
+import { enhance, OPTIMIZE, outputSize, warp } from "./cv";
 import { imageDataToCanvas, nextFrame, rotateImageData, slug } from "./image";
 import type { OcrPage } from "./ocr";
 import { cropQuad, EXPORT_MAX, ensureSource, naturalSide, type Page } from "./store";
@@ -354,7 +354,7 @@ async function renderPage(
       const upright = rotateImageData(warped, page.rotation / 90);
       // Optimize off means untouched: the straight photo, nothing applied
       const result = page.opts.optimize
-        ? enhance(upright, { mode: "bw", brightness: 0, contrast: 0, strength: 58 })
+        ? enhance(upright, OPTIMIZE)
         : upright;
       const jpeg = await canvasToJpeg(imageDataToCanvas(result), quality);
       if (jpeg) return { jpeg, width: result.width, height: result.height };

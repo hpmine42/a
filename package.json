@@ -14,7 +14,8 @@
     "ocr:assets": "node scripts/fetch-ocr-assets.mjs",
     "prebuild": "node scripts/fetch-ocr-assets.mjs",
     "predev": "node scripts/fetch-ocr-assets.mjs",
-    "docs:images": "esbuild scripts/make-demo.ts --bundle --platform=node --format=esm --outfile=.tmp/make-demo.mjs --log-level=warning && node .tmp/make-demo.mjs",
+    "sample:image": "esbuild scripts/make-sample.ts --bundle --platform=node --format=esm --external:@napi-rs/canvas --outfile=.tmp/make-sample.mjs --log-level=warning && node .tmp/make-sample.mjs",
+    "docs:images": "npm run sample:image && esbuild scripts/make-demo.ts --bundle --platform=node --format=esm --outfile=.tmp/make-demo.mjs --log-level=warning && node .tmp/make-demo.mjs",
     "test:ocr": "node scripts/test-ocr.mjs"
   },
   "dependencies": {
@@ -23,6 +24,7 @@
     "vue": "^3.5.13"
   },
   "devDependencies": {
+    "@napi-rs/canvas": "^1.0.13",
     "@types/node": "^22.9.0",
     "@vitejs/plugin-vue": "^5.2.1",
     "@vue/test-utils": "^2.5.1",
