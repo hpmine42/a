@@ -1,10 +1,16 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { Pt, Quad } from "../lib/cv";
+import { prefersReducedMotion } from "../lib/anim";
 import { canvasFor } from "../lib/image";
 import { clampToBox, containFit, loupeSourceRect, toImagePoint, type Fit } from "../lib/geometry";
 
-const props = defineProps<{ src: ImageData; quad: Quad }>();
+const props = defineProps<{
+  src: ImageData;
+  quad: Quad;
+  /** A detection pass is running: show a sweep so the wait has a reason. */
+  searching?: boolean;
+}>();
 const emit = defineEmits<{
   (e: "update:quad", quad: Quad): void;
   (e: "commit"): void;
@@ -18,6 +24,9 @@ let ctx: CanvasRenderingContext2D | null = null;
 let observer: ResizeObserver | null = null;
 let raf = 0;
 let dirty = true;
+/** Sweep progress 0..1 while `searching`, driven by its own clock. */
+let sweep = 0;
+let sweepRaf = 0;
 
 type Drag =
   | { kind: "corner"; index: number }
@@ -32,6 +41,31 @@ function markDirty() {
   dirty = true;
   if (!raf) raf = requestAnimationFrame(tick);
 }
+
+/* ------------------------------------------------------------------- sweep */
+
+function startSweep() {
+  if (sweepRaf || prefersReducedMotion()) return;
+  const start = performance.now();
+  const step = (now: number) => {
+    sweep = ((now - start) / 1150) % 1;
+    markDirty();
+    sweepRaf = requestAnimationFrame(step);
+  };
+  sweepRaf = requestAnimationFrame(step);
+}
+
+function stopSweep() {
+  if (sweepRaf) cancelAnimationFrame(sweepRaf);
+  sweepRaf = 0;
+  sweep = 0;
+  markDirty();
+}
+
+watch(
+  () => props.searching,
+  (on) => (on ? startSweep() : stopSweep())
+);
 
 function fit() {
   const el = canvas.value;
@@ -129,6 +163,34 @@ function render() {
     g.stroke();
   }
   g.restore();
+
+  // The sweep: a soft amber band travelling down the photo, clipped to the
+  // sheet, so "looking for the page" has a visible heartbeat for the ~200ms the
+  // detector needs instead of a frozen picture.
+  if (props.searching) {
+    const top = f.dy;
+    const height = props.src.height * f.scale;
+    const y = top + height * (0.08 + sweep * 0.84);
+    g.save();
+    g.beginPath();
+    g.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < 4; i++) g.lineTo(pts[i].x, pts[i].y);
+    g.closePath();
+    g.clip();
+    const band = g.createLinearGradient(0, y - 46, 0, y + 46);
+    band.addColorStop(0, "rgba(255, 192, 97, 0)");
+    band.addColorStop(0.5, "rgba(255, 192, 97, 0.22)");
+    band.addColorStop(1, "rgba(255, 192, 97, 0)");
+    g.fillStyle = band;
+    g.fillRect(f.dx, y - 46, props.src.width * f.scale, 92);
+    g.beginPath();
+    g.moveTo(f.dx, y);
+    g.lineTo(f.dx + props.src.width * f.scale, y);
+    g.lineWidth = 2;
+    g.strokeStyle = "rgba(255, 214, 152, 0.9)";
+    g.stroke();
+    g.restore();
+  }
 
   // handles
   pts.forEach((p, i) => {
@@ -302,6 +364,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   observer?.disconnect();
   if (raf) cancelAnimationFrame(raf);
+  stopSweep();
 });
 
 watch(

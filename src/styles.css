@@ -258,6 +258,7 @@ img {
 /* Icons are sized by the control they sit in, so they grow with --u too. */
 .control svg,
 .done svg,
+.crop-done svg,
 .save svg,
 .auto-pill svg {
   width: 1.3em;
@@ -451,6 +452,27 @@ img {
 .pill.ghost:hover {
   color: var(--text);
   background: rgba(255, 255, 255, 0.06);
+}
+
+/* The preview is showing its last frame and nothing brings it back by itself:
+   say so, and make the fix one tap. */
+.camera-frozen {
+  position: absolute;
+  z-index: 4;
+  left: 50%;
+  bottom: calc(18px * var(--u));
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: calc(9px * var(--u));
+  padding: calc(11px * var(--u)) calc(18px * var(--u));
+  border-radius: 999px;
+  font-size: calc(14px * var(--u));
+  font-weight: 600;
+  color: #1a1305;
+  background: linear-gradient(160deg, #ffd79a, var(--amber));
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.45);
+  animation: undo-in 0.2s var(--ease);
 }
 
 /* A small, honest "working" chip: decoding a photo from the library can take a
@@ -980,6 +1002,28 @@ img {
   inset: 0;
 }
 
+/* "No page edge found": one short nudge, then still. Enough to be felt, not
+   enough to be a show. */
+.corner-editor.missed .corner-canvas {
+  animation: corner-miss 0.4s var(--ease);
+}
+
+@keyframes corner-miss {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  20% {
+    transform: translateX(-7px);
+  }
+  45% {
+    transform: translateX(6px);
+  }
+  70% {
+    transform: translateX(-3px);
+  }
+}
+
 .corner-canvas {
   display: block;
   width: 100%;
@@ -1056,6 +1100,23 @@ img {
   gap: calc(10px * var(--u));
   padding: calc(14px * var(--u)) calc(16px * var(--u))
     calc(16px * var(--u) + env(safe-area-inset-bottom, 0px));
+}
+
+/* In the crop tool the dock holds exactly one thing: the way out. */
+.editor-dock.cropping {
+  display: block;
+}
+
+.crop-done {
+  width: 100%;
+  height: var(--tap-lg);
+}
+
+/* Keeps the counter in the header centred when the crop chip is not there. */
+.editor-spacer {
+  display: block;
+  width: calc(96px * var(--u));
+  height: var(--tap);
 }
 
 /* One switch for the whole look. On = flat light, black text on white paper;
@@ -1176,7 +1237,8 @@ img {
   background: #241a08;
 }
 
-.done {
+.done,
+.crop-done {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1193,12 +1255,14 @@ img {
   transition: transform 0.14s var(--ease), box-shadow 0.18s var(--ease);
 }
 
-.done:hover {
+.done:hover,
+.crop-done:hover {
   box-shadow: 0 12px 30px rgba(255, 192, 97, 0.34);
 }
 
-.done:active {
-  transform: scale(0.94);
+.done:active,
+.crop-done:active {
+  transform: scale(0.97);
 }
 
 /* ==========================================================================
@@ -1305,7 +1369,9 @@ img {
   aspect-ratio: 3 / 4;
   border-radius: calc(14px * var(--u));
   overflow: hidden;
-  background: #0d1014;
+  /* a light bed: pages are paper, and a landscape scan should show all of it
+     rather than being cropped to fit a portrait tile */
+  background: #f2f3f5;
   border: 1px solid var(--line);
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.4);
   transition: transform 0.16s var(--ease), border-color 0.16s var(--ease);
@@ -1314,7 +1380,7 @@ img {
 .page-thumb img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
   display: block;
 }
 

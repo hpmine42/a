@@ -43,8 +43,6 @@ export const IMPORT_MAX = 3600;
 export const PREVIEW_MAX = 2400;
 /** The first look after a shot: sharp on screen, cheap enough to feel instant. */
 export const FIRST_RENDER = 1400;
-/** While the crop tool is open the preview is only needed small. */
-export const CROP_MAX = 1200;
 export const EXPORT_MAX = 3000;
 
 export const scan = reactive({
@@ -58,8 +56,11 @@ export const scan = reactive({
 
 let nextId = 1;
 
-/** Optimize starts on: a photographed page is never finished until it is one. */
-export const defaultOpts = (): Opts => ({ optimize: true });
+/**
+ * Optimize starts *off*: the photo as taken is the honest starting point, and
+ * the switch is one tap away for anyone who wants flat, white, black-on-white.
+ */
+export const defaultOpts = (): Opts => ({ optimize: false });
 
 /**
  * How far the crop is pulled in, as a fraction of the page. Detection and
@@ -67,6 +68,16 @@ export const defaultOpts = (): Opts => ({ optimize: true });
  * sliver of desk becomes a dirty edge on every page.
  */
 export const EDGE_INSET = 0.008;
+
+/**
+ * The largest a page can be from its source photo — rendering past this only
+ * invents pixels, and a page that is upscaled from a small import looks soft
+ * no matter how sharp the pipeline is.
+ */
+export function naturalSide(page: Page): number {
+  const size = outputSize(insetQuad(page.quad, EDGE_INSET), IMPORT_MAX);
+  return Math.max(64, Math.max(size.w, size.h));
+}
 
 export const activePage = (): Page | null =>
   scan.pages.find((p) => p.id === scan.activeId) ?? null;

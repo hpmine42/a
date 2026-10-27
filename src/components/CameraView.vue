@@ -16,7 +16,10 @@ import { IMPORT_MAX } from "../lib/store";
 
 const props = defineProps<{ thumbs: string[]; pageCount: number }>();
 const emit = defineEmits<{
-  (e: "captured", payload: { img: ImageData; quad: Quad | null; auto: boolean }): void;
+  (
+    e: "captured",
+    payload: { img: ImageData; quad: Quad | null; auto: boolean; origin: "camera" | "upload" }
+  ): void;
   (e: "open-pages"): void;
 }>();
 
@@ -97,6 +100,12 @@ function zoomCapability(track: MediaStreamTrack | undefined): ZoomRange | undefi
 let stream: MediaStream | null = null;
 /** The main lens, remembered so the user can come back from the wide one. */
 let mainDeviceId: string | null = null;
+/** When the last video frame actually arrived — the freeze detector's clock. */
+let lastFrameAt = 0;
+let lastClock = -1;
+let resuming = false;
+/** Earliest time the next automatic restart may happen (anti-thrash). */
+let nextRestartAt = 0;
 let worker: Worker | null = null;
 let raf = 0;
 let detecting = false;
@@ -110,6 +119,8 @@ const smallCtx = small.getContext("2d", { willReadFrequently: true });
 const target = ref<Quad | null>(null);
 const eased = ref<Quad | null>(null);
 const lastReqId = ref(0);
+/** The preview stopped producing frames and nothing brought it back. */
+const frozen = ref(false);
 
 /* ------------------------------------------------------------------ camera */
 
@@ -141,6 +152,9 @@ async function startStream(mode: "environment" | "user", deviceId?: string) {
     /* autoplay can fail before the element is visible; the loop retries */
   }
   ready.value = true;
+  stampFrame();
+  watchFrames(el);
+  frozen.value = false;
 
   const track = stream.getVideoTracks()[0];
   const caps = (track?.getCapabilities?.() ?? {}) as { torch?: boolean };
@@ -159,6 +173,106 @@ function stopStream() {
   stream = null;
   ready.value = false;
 }
+
+/**
+ * A phone that locks, or a browser that loses focus, can quietly kill the
+ * camera track while leaving a perfectly good-looking <video> element showing
+ * its last frame. Nothing throws, nothing ends, the picture is simply frozen
+ * until the user reloads — the single most annoying bug a camera app can have.
+ *
+ * So the preview is measured, not assumed: every frame that arrives stamps a
+ * clock, and coming back to the app checks that clock. A stale clock restarts
+ * the stream once; if even that does not produce frames, the viewfinder offers
+ * a tap-to-restart instead of pretending everything is fine.
+ */
+function stampFrame() {
+  lastFrameAt = performance.now();
+}
+
+function watchFrames(el: HTMLVideoElement) {
+  const withCallback = el as HTMLVideoElement & {
+    requestVideoFrameCallback?: (cb: () => void) => number;
+  };
+  if (typeof withCallback.requestVideoFrameCallback !== "function") return;
+  const onFrame = () => {
+    stampFrame();
+    if (!disposed && video.value) watchFrames(video.value);
+  };
+  try {
+    withCallback.requestVideoFrameCallback(onFrame);
+  } catch {
+    /* not every browser that has the API lets you call it here */
+  }
+}
+
+/** True when the preview is showing something, but it is not moving. */
+function looksFrozen(): boolean {
+  if (!ready.value) return false;
+  const track = stream?.getVideoTracks()[0];
+  if (!track || track.readyState === "ended") return true;
+  // a stream that reports no frame size cannot be photographed either
+  if (!video.value?.videoWidth) return true;
+  return performance.now() - lastFrameAt > 1400;
+}
+
+/**
+ * Bring the preview back. Cheap when it is fine (a `play()` at most), a full
+ * restart when it is not — the same two steps a user would do by hand, minus
+ * the reload.
+ */
+async function ensureLive(force = false) {
+  if (resuming || disposed) return;
+  const el = video.value;
+  if (!el) return;
+
+  // a stream that never started (or died outright) deserves another go, but
+  // never one against a permission the user actually refused
+  const dead = !ready.value && error.value !== "denied";
+  const stale = ready.value && looksFrozen();
+  if (!force && performance.now() < nextRestartAt && (dead || stale)) return;
+  if (!force && !dead && !stale) {
+    if (el.paused) {
+      try {
+        await el.play();
+      } catch {
+        /* still not allowed; the freeze check will catch it */
+      }
+    }
+    return;
+  }
+
+  // A restart costs a permission prompt on some phones and a black flash on
+  // all of them: at most one every six seconds.
+  nextRestartAt = performance.now() + 6000;
+  resuming = true;
+  try {
+    const device = usingUltra.value ? ultraId.value ?? undefined : mainDeviceId ?? undefined;
+    await startStream(facing.value, device);
+    if (ready.value) {
+      stampFrame();
+      watchFrames(el);
+      frozen.value = false;
+    }
+  } finally {
+    resuming = false;
+  }
+  // a restart that produced no frames within a moment is not a fix
+  window.setTimeout(() => {
+    if (!disposed) frozen.value = ready.value && looksFrozen();
+  }, 900);
+}
+
+/** The last resort: restart on demand, from a tap the user can always make. */
+async function rewake() {
+  tap();
+  frozen.value = false;
+  await ensureLive(true);
+}
+
+const onVisibility = () => {
+  if (document.hidden) return;
+  void ensureLive();
+};
 
 /**
  * Look for a second rear camera. Browsers only expose labels after permission,
@@ -432,8 +546,19 @@ function draw() {
 
 function loop(now: number) {
   if (disposed) return;
-  scheduleDetection(now);
-  draw();
+  // A playing video advances currentTime every frame; a frozen one does not.
+  // That is the fallback clock for browsers without requestVideoFrameCallback.
+  const v = video.value;
+  if (v && v.readyState >= 2) {
+    if (v.currentTime !== lastClock) {
+      lastClock = v.currentTime;
+      stampFrame();
+    }
+  }
+  if (!document.hidden) {
+    scheduleDetection(now);
+    draw();
+  }
   raf = requestAnimationFrame(loop);
 }
 
@@ -462,7 +587,7 @@ async function capture() {
       const oy = (img.height - cropped.height) / 2;
       quad = quad.map((p) => ({ x: (p.x - ox) * s, y: (p.y - oy) * s })) as Quad;
     }
-    emit("captured", { img: cropped, quad, auto: autoOn.value });
+    emit("captured", { img: cropped, quad, auto: autoOn.value, origin: "camera" });
   } catch (err) {
     console.error("[scanner] capture failed", err);
   }
@@ -478,7 +603,7 @@ async function useDemo() {
     const file = new File([blob], "demo-invoice.jpg", { type: blob.type || "image/jpeg" });
     const img = await imageDataFromFile(file, IMPORT_MAX);
     // the demo photo has no live viewfinder, so let the detector decide
-    emit("captured", { img, quad: null, auto: false });
+    emit("captured", { img, quad: null, auto: false, origin: "upload" });
   } catch (err) {
     console.error("[scanner] demo photo unavailable", err);
   } finally {
@@ -495,7 +620,12 @@ async function onFiles(event: Event) {
   loading.value = true;
   try {
     for (const file of files) {
-      emit("captured", { img: await imageDataFromFile(file, IMPORT_MAX), quad: null, auto: false });
+      emit("captured", {
+        img: await imageDataFromFile(file, IMPORT_MAX),
+        quad: null,
+        auto: false,
+        origin: "upload",
+      });
     }
   } catch (err) {
     console.error("[scanner] could not read the photo", err);
@@ -507,6 +637,7 @@ async function onFiles(event: Event) {
 /* ------------------------------------------------------------------ mount */
 
 let observer: ResizeObserver | null = null;
+let wakeTimer = 0;
 
 onMounted(async () => {
   ensureWorker();
@@ -521,16 +652,27 @@ onMounted(async () => {
   });
   void detectInstallState();
   window.addEventListener("focus", detectInstallState);
+  // three ways a phone can come back: a tab switch, a bfcache restore, a focus
+  document.addEventListener("visibilitychange", onVisibility);
+  window.addEventListener("pageshow", onVisibility);
   await startStream(facing.value);
   raf = requestAnimationFrame(loop);
   observer = new ResizeObserver(() => draw());
   if (stage.value) observer.observe(stage.value);
+  // A camera can also die while the app never lost focus (another app grabbing
+  // the lens, a thermal stop). This is the cheap heartbeat that notices.
+  wakeTimer = window.setInterval(() => {
+    if (!document.hidden) void ensureLive();
+  }, 2500);
 });
 
 onBeforeUnmount(() => {
   disposed = true;
+  window.clearInterval(wakeTimer);
   unwatchInstall?.();
   window.removeEventListener("focus", detectInstallState);
+  document.removeEventListener("visibilitychange", onVisibility);
+  window.removeEventListener("pageshow", onVisibility);
   cancelAnimationFrame(raf);
   observer?.disconnect();
   worker?.terminate();
@@ -622,6 +764,11 @@ watch(autoOn, (on) => {
         </button>
         <span class="zoom-value" aria-live="polite">{{ zoomLabel }}</span>
       </div>
+
+      <button v-if="frozen && ready" class="camera-frozen" @click="rewake">
+        <Icon name="camera" :size="18" />
+        <span>Preview paused — tap to restart</span>
+      </button>
 
       <Transition name="fade">
         <div v-if="loading" class="camera-busy" role="status" aria-live="polite">
