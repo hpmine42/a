@@ -84,6 +84,59 @@ describe("camera top bar", () => {
   });
 });
 
+describe("the editor top bar", () => {
+  const css = read("src/styles.css");
+  const block = (selector: string) => {
+    const start = css.indexOf(`${selector} {`);
+    expect(start, `${selector} must exist`).toBeGreaterThan(-1);
+    return css.slice(start, css.indexOf("}", start));
+  };
+
+  it("never clips a control, however long the page number gets", () => {
+    // The counter grows with the count ("1/1" is three characters, "12/12" is
+    // five), and with the old spacing those 20px pushed the last chip past the
+    // right edge — "Crop" was cut in half on a 412px phone. The chips keep
+    // their labels now, and the counter is the one thing that gives way.
+    // nothing may be pushed off the edge: the counter is the one thing that
+    // gives way first, and as a last resort a chip narrows instead of leaving
+    // the screen (a clipped control is unusable, a narrow one is not)
+    expect(block(".editor-count")).toMatch(/flex: 0 1 auto/);
+    expect(block(".editor-count")).toMatch(/min-width: 0/);
+    expect(block(".editor-count")).toMatch(/text-overflow: ellipsis/);
+    expect(block(".editor-top .control")).toMatch(/flex: 0 1 auto/);
+    expect(block(".editor-top .control")).toMatch(/min-width: 0/);
+    expect(block(".editor-actions")).toMatch(/min-width: 0/);
+    // and the row itself got tighter rather than wider
+    expect(block(".editor-top")).toMatch(/gap: calc\(8px/);
+    expect(block(".editor-top")).toMatch(/padding: calc\(12px \* var\(--u\)\) calc\(12px/);
+  });
+});
+
+describe("dragging a page", () => {
+  const css = read("src/styles.css");
+  const view = read("src/components/PagesView.vue");
+
+  it("previews the move while the finger is down, like Google Keep", () => {
+    // the order changes during the drag, not on drop
+    expect(view).toMatch(/function aim\(\)/);
+    expect(view).toMatch(/movePage\(current, target\)/);
+    expect(view).toMatch(/@pointermove="onGripMove"/);
+    // and the card under the finger is drawn as a floating preview
+    expect(view).toMatch(/<Teleport to="body">/);
+    expect(view).toMatch(/class="drag-ghost"/);
+    expect(view).toMatch(/<TransitionGroup name="card"/);
+  });
+
+  it("leaves a gap where the page will land instead of a marker line", () => {
+    expect(css).toMatch(/\.page-card\.dragging \{[^}]*opacity: 0/);
+    expect(css).toMatch(/\.page-card\.dragging::after \{[^}]*dashed/);
+    expect(css).toMatch(/\.card-move \{[^}]*transition: transform/);
+    expect(css).toMatch(/\.drag-ghost \{[^}]*position: fixed/);
+    // the old "drop here" marker is gone with the old behaviour
+    expect(css).not.toMatch(/\.drop-before/);
+  });
+});
+
 describe("the crop view stays still", () => {
   const css = read("src/styles.css");
 

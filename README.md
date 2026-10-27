@@ -89,9 +89,14 @@ camera frame — desk, shadow, skew. After is what the export produces with
   matches the scan exactly — with the file name typed in the app before saving.
   On a phone *Share* hands the PDF straight to the share sheet; the download is
   the fallback, not the plan.
-- **Turn, reorder, fix.** A quarter turn lives in the header next to *Crop*;
-  pages in the grid drag into another slot by their grip (or move with the arrow
-  keys when focused); removing a page is undoable for six seconds.
+- **Turn, reorder, fix.** A quarter turn lives in the header next to *Crop*, and
+  the header gives way before a chip does: the counter shrinks first, so *Crop*
+  is never half off the screen — which it was, from twelve pages on. Pages drag
+  into another slot by their grip the way Google Keep moves a note: the card
+  lifts into a preview under the finger, the grid reflows *while* you drag, and a
+  dashed gap shows where it will land (the arrow keys move it too, and say where
+  it went). The list auto-scrolls at the edges, and removing a page is undoable
+  for six seconds.
 - **Tap to focus.** A tap always answers — ring where the finger was, plus a
   haptic — and asks the lens to focus there; where a browser cannot honour the
   point it falls back to a plain refocus, and if the lens cannot be asked at all

@@ -1096,11 +1096,47 @@ img {
   padding: calc(12px * var(--u)) calc(16px * var(--u)) calc(10px * var(--u));
 }
 
+/*
+ * The editor header holds four chips and a counter, and the counter grows with
+ * the page number: "1/1" is three characters, "12/12" is five. With the old
+ * spacing that extra 20px pushed the last chip past the right edge and cut
+ * "Crop" in half on a 390–420px phone.
+ *
+ * So: tighter gutters, the chips keep their labels but stop paying for wide
+ * padding, and the counter is the one thing allowed to shrink. A control is
+ * never clipped — being unable to tap "Crop" is a bug, a slightly narrower
+ * counter is not.
+ */
+.editor-top {
+  gap: calc(8px * var(--u));
+  padding: calc(12px * var(--u)) calc(12px * var(--u)) calc(10px * var(--u));
+}
+
+.editor-top .control {
+  /* Shrinkable is the safety net: whatever the page count or the UI scale, a
+     chip narrows instead of leaving the screen. */
+  flex: 0 1 auto;
+  min-width: 0;
+  gap: calc(8px * var(--u));
+  padding: 0 calc(12px * var(--u));
+  white-space: nowrap;
+}
+
+.editor-top .control > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .editor-count {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   font-size: var(--fs);
   font-variant-numeric: tabular-nums;
   color: var(--text);
-  padding: calc(9px * var(--u)) calc(15px * var(--u));
+  padding: calc(9px * var(--u)) calc(11px * var(--u));
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.05);
   border: 1px solid var(--line);
@@ -1318,7 +1354,9 @@ img {
 .editor-actions {
   display: flex;
   align-items: center;
-  gap: calc(8px * var(--u));
+  flex: 0 1 auto;
+  min-width: 0;
+  gap: calc(6px * var(--u));
 }
 
 .editor-actions .control {
@@ -1327,6 +1365,18 @@ img {
 
 .editor-actions .control:hover {
   color: var(--text);
+}
+
+@media (max-width: 400px) {
+  .pages-top {
+    gap: calc(8px * var(--u));
+    padding: calc(12px * var(--u)) calc(12px * var(--u)) calc(10px * var(--u));
+  }
+
+  .pages-top .control {
+    gap: calc(8px * var(--u));
+    padding: 0 calc(12px * var(--u));
+  }
 }
 
 /* A 360px phone cannot hold three labelled chips: the icons carry it, and the
@@ -1346,7 +1396,7 @@ img {
 /* Keeps the counter in the header centred when the crop chip is not there. */
 .editor-spacer {
   display: block;
-  width: calc(96px * var(--u));
+  width: calc(88px * var(--u));
   height: var(--tap);
 }
 
@@ -1663,26 +1713,111 @@ img {
   outline-offset: 2px;
 }
 
+/* Read by a screen reader only: a move announced, not drawn. */
+.sr-live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ---------------------------------------------------------------- reorder */
+
+/*
+ * Dragging a page is a *move*, not a marker.
+ *
+ * The card that is being dragged is lifted out of the grid: it is drawn once, in
+ * the preview that follows the finger (.drag-ghost), and its own slot is left
+ * empty. The order changes under the finger, and the browser's own FLIP
+ * animation (`card-move` below) slides the cards that give way — which is the
+ * Google Keep behaviour: you see where it will land before you let go.
+ */
 .page-card.dragging {
-  opacity: 0.55;
+  opacity: 0;
+  /* no transition: the gap must appear at once, not fade in under the finger */
+  transition: none;
 }
 
 .page-card.dragging .page-thumb {
-  transform: scale(0.96);
-  border-color: rgba(255, 192, 97, 0.55);
+  border-color: rgba(255, 192, 97, 0.45);
 }
 
-/* Where the page would land: a slot, not a jump */
-.page-card.drop-before::before {
+/* The empty slot the preview will drop into. Drawn on the card that is hidden,
+   so a page count change or a scroll cannot leave a stray outline behind. */
+.page-card.dragging::after {
   content: "";
   position: absolute;
-  top: calc(-5px * var(--u));
-  left: calc(4px * var(--u));
-  right: calc(4px * var(--u));
-  height: calc(4px * var(--u));
+  inset: 0;
+  border-radius: calc(14px * var(--u));
+  border: 1px dashed rgba(255, 192, 97, 0.55);
+  background: rgba(255, 192, 97, 0.05);
+}
+
+.page-card.settled {
+  animation: card-settle 0.18s var(--ease);
+}
+
+@keyframes card-settle {
+  from {
+    transform: scale(0.94);
+    opacity: 0.6;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+/* FLIP: when the order changes, cards glide into their new slots. Short on
+   purpose — a long one makes the whole grid feel like it is lagging the finger. */
+.card-move {
+  transition: transform 0.19s var(--ease);
+}
+
+.drag-ghost {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 45;
+  border-radius: calc(14px * var(--u));
+  overflow: hidden;
+  background: #f2f3f5;
+  box-shadow:
+    0 0 0 1px rgba(255, 192, 97, 0.65),
+    0 18px 42px rgba(0, 0, 0, 0.62),
+    0 4px 12px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+  will-change: transform;
+  transform-origin: 50% 45%;
+}
+
+.drag-ghost img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.drag-ghost-num {
+  position: absolute;
+  left: calc(8px * var(--u));
+  top: calc(8px * var(--u));
+  display: grid;
+  place-items: center;
+  min-width: calc(24px * var(--u));
+  height: calc(24px * var(--u));
+  padding: 0 calc(7px * var(--u));
   border-radius: 999px;
+  font-size: calc(12.5px * var(--u));
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  color: #16130c;
   background: var(--amber);
-  box-shadow: 0 0 14px rgba(255, 192, 97, 0.7);
 }
 
 .page-del {
