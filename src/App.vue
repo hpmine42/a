@@ -4,13 +4,16 @@ import CameraView from "./components/CameraView.vue";
 import CaptureReview from "./components/CaptureReview.vue";
 import EditorView from "./components/EditorView.vue";
 import PagesView from "./components/PagesView.vue";
+import { sleep } from "./lib/anim";
 import { detectPageQuad, fullFrameQuad, type Quad } from "./lib/cv";
 import { tap, thump } from "./lib/haptics";
 import { makeThumb, nextFrame } from "./lib/image";
-import { addPage, FIRST_RENDER, processPage, scan } from "./lib/store";
+import { addPage, FIRST_RENDER, naturalSide, processPage, scan } from "./lib/store";
 
 type View = "camera" | "review" | "edit" | "pages";
-type Shot = { img: ImageData; quad: Quad | null; auto: boolean };
+/** Where a photo came from: the shutter, or a file the user picked. */
+type Origin = "camera" | "upload";
+type Shot = { img: ImageData; quad: Quad | null; auto: boolean; origin: Origin };
 
 const view = ref<View>("camera");
 const scanning = ref(false);
@@ -20,12 +23,18 @@ const pending = ref<ImageData | null>(null);
 const pendingAuto = ref(false);
 /** The review sheet is working (a full detection pass), so it must stay put. */
 const reviewBusy = ref(false);
+/** Which photo this is and what the automatic search is doing. */
+const pendingOrigin = ref<Origin>("camera");
+const reviewPhase = ref<"idle" | "searching" | "found" | "miss">("idle");
+const reviewFound = ref<Quad | null>(null);
 const editorMode = ref<"result" | "frame">("result");
 /** Where the editor goes back to: the camera after a shot, the grid after a tap. */
 const editorReturn = ref<"camera" | "pages">("camera");
 const editorNotice = ref<string | null>(null);
 
 const queue: Shot[] = [];
+/** Bumped whenever the review sheet is left, so a slow pass cannot resurrect it. */
+let reviewToken = 0;
 let busy = false;
 
 /* ---------------------------------------------------------------- capture */
@@ -53,6 +62,9 @@ function pump() {
   } else {
     pending.value = next.img;
     pendingAuto.value = next.auto;
+    pendingOrigin.value = next.origin;
+    reviewPhase.value = "idle";
+    reviewFound.value = null;
     view.value = "review";
   }
 }
@@ -67,9 +79,13 @@ async function applyDetected(img: ImageData, quad: Quad) {
     const page = addPage(img, "scan");
     page.quad = quad;
     page.warped = null;
-    // Enough pixels for the first look and for a sharp thumbnail; the editor
-    // re-renders at screen size only if its stage needs more than this.
-    await processPage(page, { full: true, rewriteWarp: true, maxSide: FIRST_RENDER });
+    // Enough pixels for the first look and for a sharp thumbnail — never more
+    // than the photo actually has, or the page is born slightly soft.
+    await processPage(page, {
+      full: true,
+      rewriteWarp: true,
+      maxSide: Math.min(FIRST_RENDER, naturalSide(page)),
+    });
     editorMode.value = "result";
     editorNotice.value = null;
     editorReturn.value = "camera";
@@ -82,20 +98,38 @@ async function applyDetected(img: ImageData, quad: Quad) {
 /**
  * Let the detector have a go on the captured photo.
  *
- * The photo stays on the review sheet for as long as the work takes: clearing
- * `pending` first would unmount the sheet and flash the page grid for half a
- * second, which reads like a bug.
+ * The photo stays on the review sheet while it works, so the sweep is visible:
+ * "one pass over the photo" should look like one pass over the photo. When the
+ * sheet is found, its corners snap in before the editor opens — you can see
+ * what the app picked instead of being teleported into a crop you did not make.
  */
 async function chooseAuto() {
   const img = pending.value;
   if (!img || reviewBusy.value) return;
+  const token = ++reviewToken;
   reviewBusy.value = true;
   busy = true;
+  const started = performance.now();
   try {
-    const quad = detectPageQuad(img, { effort: "thorough" });
+    reviewPhase.value = "searching";
+    reviewFound.value = null;
+    // a sweep that vanishes in 80ms is a glitch, not an animation
+    await sleep(120);
+
+    const quad = safeDetect(img);
+    const elapsed = performance.now() - started;
+    if (elapsed < 300) await sleep(300 - elapsed);
+    // Discard pressed while the detector was running: their photo, their call
+    if (token !== reviewToken) return;
+
     if (quad) {
+      reviewFound.value = quad;
+      reviewPhase.value = "found";
+      await sleep(360);
       await applyDetected(img, quad);
     } else {
+      reviewPhase.value = "miss";
+      await sleep(420);
       const page = addPage(img, "scan");
       page.quad = fullFrameQuad(img.width, img.height);
       page.warped = null;
@@ -106,9 +140,24 @@ async function chooseAuto() {
     }
   } finally {
     pending.value = null;
+    if (token === reviewToken) {
+      pending.value = null;
+      reviewPhase.value = "idle";
+      reviewFound.value = null;
+    }
     reviewBusy.value = false;
     busy = false;
     pump();
+  }
+}
+
+/** Detection can throw on a strange image; that must never strand the flow. */
+function safeDetect(img: ImageData): Quad | null {
+  try {
+    return detectPageQuad(img, { effort: "thorough" });
+  } catch (err) {
+    console.warn("[scano] detection failed", err);
+    return null;
   }
 }
 
@@ -116,11 +165,12 @@ async function chooseAuto() {
 function chooseManual() {
   const img = pending.value;
   if (!img) return;
+  reviewToken++;
   pending.value = null;
   tap();
   const page = addPage(img, "scan");
   // a detection guess is a decent starting point, but it never blocks the user
-  const guess = detectPageQuad(img, { effort: "fast" });
+  const guess = safeDetect(img);
   page.quad = guess ?? fullFrameQuad(img.width, img.height);
   page.warped = null;
   editorMode.value = "frame";
@@ -133,6 +183,7 @@ function chooseManual() {
 function chooseWhole() {
   const img = pending.value;
   if (!img) return;
+  reviewToken++;
   pending.value = null;
   tap();
   const page = addPage(img, "scan");
@@ -145,6 +196,7 @@ function chooseWhole() {
 }
 
 function retake() {
+  reviewToken++;
   pending.value = null;
   view.value = "camera";
   pump();
@@ -181,7 +233,11 @@ function onKey(event: KeyboardEvent) {
 }
 
 onMounted(() => window.addEventListener("keydown", onKey));
-onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
+onBeforeUnmount(() => {
+  // a detection pass that is still running must not touch a closed app
+  reviewToken++;
+  window.removeEventListener("keydown", onKey);
+});
 </script>
 
 <template>
@@ -201,8 +257,11 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
         key="review"
         :src="pending"
         :page-count="scan.pages.length"
+        :origin="pendingOrigin"
         :detection-on="pendingAuto"
         :busy="reviewBusy"
+        :phase="reviewPhase"
+        :found="reviewFound"
         @auto="chooseAuto"
         @manual="chooseManual"
         @whole="chooseWhole"

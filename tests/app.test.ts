@@ -34,6 +34,20 @@ async function shootDemo(wrapper: VueWrapper) {
   await tick(300);
 }
 
+/**
+ * Finish a page the way the app now asks for it: leave the crop tool first (its
+ * only control is "Done cropping"), then tap Done on the page itself.
+ */
+async function finish(wrapper: VueWrapper) {
+  const crop = wrapper.find("button.crop-done");
+  if (crop.exists()) {
+    await crop.trigger("click");
+    await tick(500);
+  }
+  await wrapper.find("button.done").trigger("click");
+  await tick(120);
+}
+
 async function choose(wrapper: VueWrapper, label: string) {
   const button = wrapper.findAll("button.choice").find((b) => b.text().includes(label));
   expect(button, `choice "${label}" must exist`).toBeTruthy();
@@ -141,7 +155,25 @@ describe("capture with a known page", () => {
     await tick(200);
 
     expect(wrapper.find(".review").exists()).toBe(true);
+    // detection was off for this shot: the copy says so, because that is why
+    // nothing was cropped
+    expect(wrapper.text()).toContain("Detection is off");
     expect(scan.pages.length).toBe(0);
+    wrapper.unmount();
+  });
+
+  it("says no page was found when detection was on and found nothing", async () => {
+    allowCamera();
+    const wrapper = mount(App);
+    await tick(40);
+    await wrapper.find('button[aria-label="Detect the page while framing"]').trigger("click");
+    await tick(80);
+    await wrapper.find(".shutter").trigger("click");
+    await tick(200);
+
+    expect(wrapper.find(".review").exists()).toBe(true);
+    expect(wrapper.text()).toContain("No page edge found");
+    expect(wrapper.text()).not.toContain("Detection is off");
     wrapper.unmount();
   });
 });
@@ -166,6 +198,42 @@ describe("capture without a page", () => {
     wrapper.unmount();
   });
 
+  it("shows the search on the sheet instead of freezing", async () => {
+    stubDemoFetch();
+    const wrapper = mount(App);
+    await tick(20);
+    await shootDemo(wrapper);
+
+    const auto = wrapper.findAll("button.choice").find((b) => b.text().includes("Find the page"))!;
+    await auto.trigger("click");
+    await tick(30);
+
+    // mid-flight the sheet is working: a sweep, honest words, and no buttons
+    // that could start a second pass
+    expect(wrapper.text()).toContain("Looking for the page");
+    expect(wrapper.findAll("button.choice").length).toBe(0);
+
+    // and it must finish on its own, not need a second tap
+    await tick(900);
+    expect(wrapper.find(".editor, .review").exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  it("does not blame detection for a photo that was uploaded", async () => {
+    stubDemoFetch();
+    const wrapper = mount(App);
+    await tick(20);
+    await shootDemo(wrapper);
+
+    // a library photo never had a viewfinder, so there was no detection to be
+    // switched off — the sheet must ask the plain question
+    expect(wrapper.find(".review").exists()).toBe(true);
+    expect(wrapper.text()).toContain("How should we crop this?");
+    expect(wrapper.text()).toContain("Nothing has been cropped yet");
+    expect(wrapper.text()).not.toContain("Detection is off");
+    wrapper.unmount();
+  });
+
   it("opens the corner tool straight away when cropping by hand", async () => {
     stubDemoFetch();
     const wrapper = mount(App);
@@ -185,6 +253,8 @@ describe("capture without a page", () => {
     await tick(20);
     await shootDemo(wrapper);
     await choose(wrapper, "Find the page automatically");
+    // the sweep has to be seen, then the "nothing found" state, then the tool
+    await tick(700);
 
     expect(wrapper.find(".corner-editor").exists()).toBe(true);
     expect(wrapper.find(".frame-hint").text()).toContain("No page edge found");
@@ -219,36 +289,59 @@ describe("capture without a page", () => {
 });
 
 describe("editor", () => {
-  it("has one Optimize switch, on by default, and it toggles", async () => {
+  it("has one Optimize switch, off by default, and it toggles", async () => {
     stubDemoFetch();
     const wrapper = mount(App);
     await tick(20);
     await shootDemo(wrapper);
     await choose(wrapper, "Crop it by hand");
+    await wrapper.find("button.crop-done").trigger("click");
+    await tick(500);
 
     const button = wrapper.find("button.optimize");
     expect(button.exists()).toBe(true);
     expect(button.text()).toContain("Optimize");
-    // crisp text is the point of a scanner, so it starts on
+    // the photo as taken is the honest starting point
+    expect(scan.pages[0].opts.optimize).toBe(false);
+    expect(button.attributes("aria-pressed")).toBe("false");
+    expect(button.text()).toContain("Off");
+
+    await button.trigger("click");
+    await tick(400);
+
     expect(scan.pages[0].opts.optimize).toBe(true);
     expect(button.attributes("aria-pressed")).toBe("true");
     expect(button.classes()).toContain("on");
     expect(button.text()).toContain("On");
 
     await button.trigger("click");
-    await tick(300);
-
+    await tick(400);
     expect(scan.pages[0].opts.optimize).toBe(false);
-    expect(button.attributes("aria-pressed")).toBe("false");
-    expect(button.text()).toContain("Off");
-
-    await button.trigger("click");
-    await tick(300);
-    expect(scan.pages[0].opts.optimize).toBe(true);
     wrapper.unmount();
   });
 
-  it("renders the new crop when Done is tapped straight from the crop tool", async () => {
+  it("offers only the way out while the corners are being placed", async () => {
+    stubDemoFetch();
+    const wrapper = mount(App);
+    await tick(20);
+    await shootDemo(wrapper);
+    await choose(wrapper, "Crop it by hand");
+
+    expect(wrapper.find(".corner-editor").exists()).toBe(true);
+    // in the crop tool there is nothing to optimize yet and nothing to finish
+    expect(wrapper.find("button.optimize").exists()).toBe(false);
+    expect(wrapper.find("button.done").exists()).toBe(false);
+    expect(wrapper.find("button.crop-done").text()).toContain("Done cropping");
+
+    await wrapper.find("button.crop-done").trigger("click");
+    await tick(500);
+    expect(wrapper.find(".corner-editor").exists()).toBe(false);
+    expect(wrapper.find("button.optimize").exists()).toBe(true);
+    expect(wrapper.find("button.done").exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  it("renders the new crop before the page is finished", async () => {
     stubDemoFetch();
     const wrapper = mount(App);
     await tick(20);
@@ -260,8 +353,10 @@ describe("editor", () => {
     const editor = wrapper.findComponent({ name: "CornerEditor" });
     const next = page.quad.map((p) => ({ x: p.x * 0.7, y: p.y * 0.7 }));
     editor.vm.$emit("update:quad", next);
-    await wrapper.find("button.done").trigger("click");
+    await wrapper.find("button.crop-done").trigger("click");
     await tick(500);
+    await wrapper.find("button.done").trigger("click");
+    await tick(200);
 
     // the grid shows the page that was just cropped, not the one before it
     expect(wrapper.find(".pages").exists()).toBe(true);
@@ -314,8 +409,7 @@ describe("pages", () => {
     await tick(20);
     await shootDemo(wrapper);
     await choose(wrapper, "Crop it by hand");
-    await wrapper.find("button.done").trigger("click");
-    await tick(100);
+    await finish(wrapper);
 
     expect(wrapper.find(".pages").exists()).toBe(true);
     expect(wrapper.findAll(".page-card").length).toBe(1);
@@ -336,8 +430,7 @@ describe("pages", () => {
     await tick(20);
     await shootDemo(wrapper);
     await choose(wrapper, "Crop it by hand");
-    await wrapper.find("button.done").trigger("click");
-    await tick(100);
+    await finish(wrapper);
 
     await wrapper.find(".page-del").trigger("click");
     await tick(50);
@@ -361,8 +454,7 @@ describe("pages", () => {
     await tick(20);
     await shootDemo(wrapper);
     await choose(wrapper, "Crop it by hand");
-    await wrapper.find("button.done").trigger("click");
-    await tick(100);
+    await finish(wrapper);
     expect(wrapper.find(".pages").exists()).toBe(true);
 
     // tap the thumbnail: the editor opens, and Back must lead to the grid again
@@ -383,8 +475,7 @@ describe("pages", () => {
     await tick(20);
     await shootDemo(wrapper);
     await choose(wrapper, "Crop it by hand");
-    await wrapper.find("button.done").trigger("click");
-    await tick(100);
+    await finish(wrapper);
 
     await wrapper.find(".page-del").trigger("click");
     await tick(50);
@@ -426,8 +517,7 @@ describe("pdf naming", () => {
     await tick(20);
     await shootDemo(wrapper);
     await choose(wrapper, "Crop it by hand");
-    await wrapper.find("button.done").trigger("click");
-    await tick(100);
+    await finish(wrapper);
 
     const field = wrapper.find("#pdf-name");
     expect(field.exists()).toBe(true);

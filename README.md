@@ -40,7 +40,8 @@ phone. MIT, no backend, no analytics, no CDN.
 | ![](docs/before.jpg) | ![](docs/after.jpg) |
 
 Both images come from the demo photo that ships with the app. Before is the raw
-camera frame — desk, shadow, skew. After is what the export produces.
+camera frame — desk, shadow, skew. After is what the export produces with
+*Optimize* switched on.
 
 ## What it does
 
@@ -51,12 +52,22 @@ camera frame — desk, shadow, skew. After is what the export produces.
   hand, detect this photo, or keep the whole frame.
 - **Manual framing that actually lands.** Drag any corner with a magnifier loupe
   (it shows exactly the pixel under your finger), or drag the whole sheet. The
-  page is re-rendered once, when you leave the crop tool, so dragging stays
-  butter-smooth instead of warping a photo on every finger lift.
-- **One switch, no look-hunting.** *Optimize* flattens the lighting, whitens the
-  paper and sharpens the text; off gives you the straight photo exactly as it
-  was taken. It is the only image control in the app, and it costs one pass
-  over the preview rather than a re-import.
+  crop tool has exactly one button — *Done cropping* — and the page is rendered
+  once on the way out, so dragging stays butter-smooth instead of warping a
+  photo on every finger lift.
+- **Find the page, and *see* it.** Pressing *Find the page* sweeps the photo
+  while the detector works, then glides the four corners onto what it found — a
+  quarter of a second, and you know exactly what was picked. Nothing found? The
+  frame gives one short nudge and says so.
+- **One switch, no look-hunting.** *Optimize* is off by default, because the
+  photo as taken is the honest starting point; switched on it flattens the
+  lighting, whitens the paper and sharpens the text. It then appears in the dock
+  of the finished page, not in the crop tool, where you are not looking at the
+  picture yet.
+- **The preview cannot freeze.** Phones kill camera tracks when they feel like
+  it and leave a convincing last frame behind. The viewfinder measures whether
+  frames are actually arriving, restarts the stream when the app comes back,
+  and offers *Preview paused — tap to restart* if even that fails.
 - **Multi-page PDF** at up to 3000px per page — A4, US Letter, or a page that
   matches the scan exactly — with the file name typed in the app before saving.
 - **Pinch to zoom in the viewfinder**, with 0.5× / 1× / 2× chips and a switch to
@@ -101,12 +112,20 @@ light is never even. So `enhance()` works in this order:
    back up — soft edges, so small type stays readable instead of turning into
    speckle.
 
-Imports are read at up to 3600px and exports at 3000px. The editor renders at
-the size of the glass instead of a fixed 2400px — a page shown 390px wide gains
-nothing from a 6× oversampled buffer, and the difference is what makes toggling
-*Optimize* feel instant. The crop is pulled in by 0.8%, because detection and
-hand-placed corners both tend to sit a little outside the paper — that sliver of
-desk is the dark line along the edge of an otherwise clean scan.
+Imports are read at up to 3600px, exports at 3000px, and neither is ever scaled
+above what the photo actually contains.
+
+The editor renders its preview at about 1.35× the pixel size of the canvas it
+draws into, and never beyond ~1.6× the page's own resolution. That ratio is the
+whole difference between *crisp* and *blurry* for thresholded text: black and
+white glyph edges survive a downscale badly, so the canvas wants more source
+pixels than it has output pixels. (Sizing the preview by the stage's height
+instead — which is what it used to do — rendered a page taller than the canvas
+and squeezed it, and that is what made Optimize look softer than the photo.)
+
+The crop is pulled in by 0.8%, because detection and hand-placed corners both
+tend to sit a little outside the paper — that sliver of desk is the dark line
+along the edge of an otherwise clean scan.
 
 ## How the detection works
 

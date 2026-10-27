@@ -3,9 +3,19 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import CornerEditor from "./CornerEditor.vue";
 import Icon from "./Icon.vue";
 import type { Quad } from "../lib/cv";
+import { glideQuad, sleep } from "../lib/anim";
 import { click, tap } from "../lib/haptics";
 import { canvasFor, containFit } from "../lib/image";
-import { activePage, autoDetect, CROP_MAX, PREVIEW_MAX, processPage, scan } from "../lib/store";
+import { insetQuad, outputSize } from "../lib/cv";
+import {
+  activePage,
+  autoDetect,
+  EDGE_INSET,
+  naturalSide,
+  PREVIEW_MAX,
+  processPage,
+  scan,
+} from "../lib/store";
 
 const props = withDefaults(
   defineProps<{
@@ -35,7 +45,7 @@ function hideBusy() {
 }
 
 /** Breathing room around the page, in CSS pixels — must match .editor-stage. */
-const STAGE_PAD = 40;
+const STAGE_PAD = 26;
 
 const page = computed(() => activePage());
 const mode = ref<"result" | "frame">(props.initialMode);
@@ -43,13 +53,18 @@ const notice = ref<string | null>(props.notice);
 let noticeTimer = 0;
 const busy = ref(false);
 let busyTimer = 0;
+/** "Find the page" is running: the crop canvas shows a sweep of its own. */
+const searching = ref(false);
+/** A failed search: the frame gives one small shake, then forgets it. */
+const missed = ref(false);
+let missTimer = 0;
 /** The canvas just changed under the user: a 200ms dip says "this is new". */
 const swapping = ref(false);
 let swapTimer = 0;
 const stage = ref<HTMLDivElement | null>(null);
 const resultCanvas = ref<HTMLCanvasElement | null>(null);
 const pageIndex = computed(() => scan.pages.findIndex((p) => p.id === scan.activeId) + 1);
-const optimizing = computed(() => page.value?.opts.optimize ?? true);
+const optimizing = computed(() => page.value?.opts.optimize ?? false);
 
 let observer: ResizeObserver | null = null;
 let drawFrame = 0;
@@ -70,7 +85,7 @@ function drawResult() {
   if (!el || !host || !current?.result) return;
   const img = current.result;
   const rect = host.getBoundingClientRect();
-  const pad = 26;
+  const pad = STAGE_PAD;
   if (!rect.width || !rect.height) return;
 
   const fit = containFit(
@@ -110,19 +125,40 @@ function queueDraw() {
 /**
  * How many pixels the page actually needs.
  *
- * The editor never zooms, so rendering at 2400px to show a 380px-wide page was
- * nine times the work for a difference no one can see — and it made the
- * Optimize switch feel sluggish. Render at the size of the glass instead, with
- * a little headroom for odd pixel ratios. Exports re-render at full size anyway.
+ * This has to be measured the way the canvas is measured: the page is fitted
+ * into the stage *by its own aspect*, so on a portrait phone a portrait sheet is
+ * limited by the screen width, not by its height. Sizing it by the stage's long
+ * side (as this used to) rendered a 1000px-tall page and then squeezed it into
+ * a 600px-tall canvas — and downscaling hard-thresholded text is precisely what
+ * turns crisp black type into grey, uneven mush. Rendered at the canvas' own
+ * pixel count, every glyph lands on the screen 1:1.
  */
 function neededSide(): number {
   const host = stage.value;
+  const current = page.value;
   if (!host) return PREVIEW_MAX;
   const rect = host.getBoundingClientRect();
   if (!rect.width || !rect.height) return PREVIEW_MAX;
+
+  const page0 = current
+    ? outputSize(insetQuad(current.quad, EDGE_INSET), 10000)
+    : { w: 3, h: 4 };
+  const boxW = Math.max(40, rect.width - STAGE_PAD);
+  const boxH = Math.max(40, rect.height - STAGE_PAD);
+  const cssLong = Math.max(page0.w, page0.h) * Math.min(boxW / page0.w, boxH / page0.h);
   const dpr = Math.min(2, window.devicePixelRatio || 1);
-  const long = Math.max(28, Math.max(rect.width, rect.height) - STAGE_PAD);
-  return Math.round(Math.min(PREVIEW_MAX, Math.max(720, long * dpr * 1.04)));
+  const natural = current ? naturalSide(current) : PREVIEW_MAX;
+  /* Thresholded text is pure black and white, and a canvas that has to shrink
+   * it lands each glyph edge on a different fraction of a pixel: solid strokes
+   * break up, counters fill in, and the whole page reads blurry. Rendering a
+   * third again larger than the canvas then lets the browser average *many*
+   * pixels per output pixel, which is what makes small type look printed
+   * instead of smeared. Never past the page's own resolution — upscaling
+   * invents nothing. */
+  const wanted = cssLong * dpr * 1.35;
+  // A small import may be upsampled a little (that is what smooths the glyph
+  // edges), but never far: past ~1.6x there is nothing left to interpolate.
+  return Math.round(Math.min(PREVIEW_MAX, natural * 1.6, Math.max(700, wanted)));
 }
 
 /**
@@ -210,9 +246,17 @@ function refreshQuietly() {
     .catch(() => undefined);
 }
 
-function finish() {
+async function finish() {
   tap();
-  refreshQuietly();
+  const current = page.value;
+  // A crop that was never rendered would leave the grid showing the old page.
+  // Rendering it small is a few dozen milliseconds and is worth the honesty.
+  if (current && cropDirty) {
+    cropDirty = false;
+    await processPage(current, { full: true, rewriteWarp: true, maxSide: 900 }).catch(
+      () => undefined
+    );
+  }
   emit("done");
 }
 
@@ -220,21 +264,44 @@ function onCommit() {
   /* intentionally empty: see onQuad */
 }
 
+/**
+ * "Find the page" inside the crop tool.
+ *
+ * The detector needs ~200ms, which is long enough to look frozen, so the canvas
+ * sweeps while it runs. A hit then glides the four corners to the new page over
+ * a fifth of a second — that is the whole point: you *see* what it picked. A
+ * miss shakes the frame once and says so in words; no second animation.
+ */
 async function runAuto() {
   const current = page.value;
-  if (!current) return;
-  showBusy();
-  try {
-    const found = autoDetect(current);
-    if (found) {
-      await reprocess({ rewriteWarp: true, maxSide: CROP_MAX, full: false });
-      mode.value = "frame";
-      notice.value = "Page found — drag a corner to adjust";
-    } else {
-      notice.value = "No page edge found — drag the corners";
-    }
-  } finally {
-    hideBusy();
+  if (!current || searching.value) return;
+  const before = current.quad.map((p) => ({ ...p })) as Quad;
+  tap();
+  searching.value = true;
+  await sleep(140);
+
+  const found = autoDetect(current);
+  searching.value = false;
+
+  if (found) {
+    const target = current.quad.map((p) => ({ ...p })) as Quad;
+    current.quad = before;
+    await glideQuad(before, target, 260, (quad) => {
+      current.quad = quad as Quad;
+      current.warped = null;
+      current.warpedSide = 0;
+      current.cacheKey = "";
+      cropDirty = true;
+    });
+    current.quad = target;
+    // no need to render here: the page is drawn when the crop tool closes, and
+    // the sweep + glide have already shown what was found
+    notice.value = "Page found — drag a corner to adjust";
+  } else {
+    missed.value = true;
+    window.clearTimeout(missTimer);
+    missTimer = window.setTimeout(() => (missed.value = false), 420);
+    notice.value = "No page edge found — drag the corners";
   }
 }
 
@@ -262,6 +329,17 @@ watch(
   }
 );
 
+/** The stage has no size until it is laid out; rendering before that would
+ *  choose the biggest budget and throw it away a frame later. */
+async function stageReady(): Promise<void> {
+  for (let i = 0; i < 4; i++) {
+    const rect = stage.value?.getBoundingClientRect();
+    if (rect && rect.width > 0 && rect.height > 0) return;
+    await nextTick();
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  }
+}
+
 onMounted(async () => {
   observer = new ResizeObserver(() => {
     queueDraw();
@@ -276,12 +354,12 @@ onMounted(async () => {
     }, 260);
   });
   if (stage.value) observer.observe(stage.value);
-  await nextTick();
+  await stageReady();
   const current = page.value;
   const want = neededSide();
   // an existing render at *or above* what the screen needs is good enough: a
-  // 1400px preview on a 1250px stage is not worth re-warping
-  if (current && (!current.result || current.warpedSide < want * 0.92)) {
+  // 1400px preview on a 1250px canvas is not worth re-warping
+  if (current && (!current.result || current.warpedSide < want)) {
     await reprocess({ rewriteWarp: !current.warped, maxSide: want });
   } else {
     renderedSide = current?.warpedSide ?? 0;
@@ -295,6 +373,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   window.clearTimeout(swapTimer);
+  window.clearTimeout(missTimer);
   refreshQuietly();
   observer?.disconnect();
   window.clearTimeout(resizeTimer);
@@ -327,15 +406,16 @@ defineExpose({ openFrame: () => (mode.value = "frame") });
       </div>
 
       <button
+        v-if="mode === 'result'"
         class="control"
-        :class="{ on: mode === 'frame' }"
-        :aria-pressed="mode === 'frame'"
         aria-label="Adjust the corners"
         @click="toggleFrame"
       >
         <Icon name="crop" :size="19" />
-        <span>{{ mode === 'frame' ? 'Done cropping' : 'Crop' }}</span>
+        <span>Crop</span>
       </button>
+      <!-- in the crop tool the way out is the big button below, not here -->
+      <span v-else class="editor-spacer" aria-hidden="true" />
     </header>
 
     <div class="editor-stage" ref="stage">
@@ -350,6 +430,8 @@ defineExpose({ openFrame: () => (mode.value = "frame") });
         v-if="mode === 'frame'"
         :src="page.src"
         :quad="page.quad"
+        :searching="searching"
+        :class="{ missed }"
         @update:quad="onQuad"
         @commit="onCommit"
       />
@@ -371,28 +453,40 @@ defineExpose({ openFrame: () => (mode.value = "frame") });
       </Transition>
     </div>
 
-    <footer class="editor-dock">
+    <footer class="editor-dock" :class="{ cropping: mode === 'frame' }">
       <button
-        class="optimize"
-        :class="{ on: optimizing }"
-        :aria-pressed="optimizing"
-        aria-label="Optimize this page"
-        @click="toggleOptimize"
+        v-if="mode === 'frame'"
+        class="crop-done"
+        aria-label="Done cropping"
+        @click="toggleFrame"
       >
-        <span class="optimize-icon" aria-hidden="true">
-          <Icon name="sparkle" :size="20" :stroke="1.9" />
-        </span>
-        <span class="optimize-text">
-          <strong>Optimize</strong>
-          <small>{{ optimizing ? "On · crisp text" : "Off · untouched" }}</small>
-        </span>
-        <span class="optimize-switch" aria-hidden="true"><span /></span>
+        <Icon name="check" :size="20" :stroke="2.4" />
+        <span>Done cropping</span>
       </button>
 
-      <button class="done" aria-label="Done with this page" @click="finish">
-        <Icon name="check" :size="20" :stroke="2.4" />
-        <span>Done</span>
-      </button>
+      <template v-else>
+        <button
+          class="optimize"
+          :class="{ on: optimizing }"
+          :aria-pressed="optimizing"
+          aria-label="Optimize this page"
+          @click="toggleOptimize"
+        >
+          <span class="optimize-icon" aria-hidden="true">
+            <Icon name="sparkle" :size="20" :stroke="1.9" />
+          </span>
+          <span class="optimize-text">
+            <strong>Optimize</strong>
+            <small>{{ optimizing ? "On · crisp text" : "Off · untouched" }}</small>
+          </span>
+          <span class="optimize-switch" aria-hidden="true"><span /></span>
+        </button>
+
+        <button class="done" aria-label="Done with this page" @click="finish">
+          <Icon name="check" :size="20" :stroke="2.4" />
+          <span>Done</span>
+        </button>
+      </template>
     </footer>
   </div>
 </template>

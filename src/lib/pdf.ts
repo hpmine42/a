@@ -1,7 +1,7 @@
 import type { jsPDF as JsPdf } from "jspdf";
 import { enhance, insetQuad, outputSize, warp } from "./cv";
 import { imageDataToCanvas, nextFrame, slug } from "./image";
-import { EDGE_INSET, EXPORT_MAX, type Page } from "./store";
+import { EDGE_INSET, EXPORT_MAX, naturalSide, type Page } from "./store";
 
 export type PageFormat = "a4" | "letter" | "fit";
 
@@ -89,7 +89,9 @@ export async function exportPdf(
     await nextFrame();
 
     const quad = insetQuad(page.quad, EDGE_INSET);
-    const size = outputSize(quad, EXPORT_MAX);
+    // never scale a page above what the photo has: invented pixels cost file
+    // size and buy nothing a reader can see
+    const size = outputSize(quad, Math.min(EXPORT_MAX, naturalSide(page)));
     const warped = warp(page.src, quad, size.w, size.h);
     // Optimize off means untouched: the straight photo, nothing applied
     const result = page.opts.optimize
