@@ -1762,13 +1762,16 @@ img {
  *
  * The card that is being dragged is lifted out of the grid: it is drawn once, in
  * the preview that follows the finger (.drag-ghost), and its own slot is left
- * empty. The order changes under the finger, and the browser's own FLIP
- * animation (`card-move` below) slides the cards that give way — which is the
- * Google Keep behaviour: you see where it will land before you let go.
+ * empty. The order changes under the finger and the cards that give way slide
+ * into their new slots (PagesView.glideFrom) — which is the Google Keep
+ * behaviour: you see where it will land before you let go.
  */
 .page-card.dragging {
   opacity: 0;
-  /* no transition: the gap must appear at once, not fade in under the finger */
+  /* No transition: the gap must appear at once, not fade in under the finger.
+     This is also why the grid animates its own moves (glideFrom) instead of
+     using a `-move` class: as the first child of the grid, this rule is what a
+     move-class check would read, and it would read "cannot animate". */
   transition: none;
 }
 
@@ -1789,12 +1792,6 @@ img {
 
 /* Landing is not an event: no fade, no pop. A card that goes translucent for a
    moment under the finger reads as a glitch, not as a confirmation. */
-
-/* FLIP: when the order changes, cards glide into their new slots. Short on
-   purpose — a long one makes the whole grid feel like it is lagging the finger. */
-.card-move {
-  transition: transform 0.19s var(--ease);
-}
 
 .drag-ghost {
   position: fixed;

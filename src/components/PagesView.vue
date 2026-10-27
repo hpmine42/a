@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { prefersReducedMotion } from "../lib/anim";
 import Icon from "./Icon.vue";
 import { tap, thump } from "../lib/haptics";
@@ -343,6 +343,79 @@ function cardEls(): HTMLElement[] {
   return Array.from(root.querySelectorAll<HTMLElement>(".page-card"));
 }
 
+/** How long a card takes to slide into the slot that just opened up. */
+const GLIDE_MS = 190;
+/** Must match `--ease` in the stylesheet — a card easing differently looks broken. */
+const GLIDE_EASE = "cubic-bezier(0.22, 0.61, 0.36, 1)";
+/** The glide already running on a card, so two moves in a row cannot stack. */
+const glides = new WeakMap<HTMLElement, Animation>();
+/** Geometry from before the order changed, waiting for the patch to land. */
+let pendingLayout: Map<number, DOMRect> | null = null;
+
+/** Where every card sits right now, by page id. */
+function layoutSnapshot(): Map<number, DOMRect> {
+  const before = new Map<number, DOMRect>();
+  for (const el of cardEls()) before.set(Number(el.dataset.page), el.getBoundingClientRect());
+  return before;
+}
+
+/**
+ * Slide every card from where it was to where it now is.
+ *
+ * Not `<TransitionGroup>`'s own move class. That one decides once per update
+ * whether the group may animate at all, by reading the transition of the
+ * *first* child. While the first page is the one under the finger, that child
+ * carries `.page-card.dragging` — `transition: none`, two classes, so it beats
+ * `.card-move` — and the group decides the grid cannot animate: dragging the
+ * top page down reshuffled everything without a single frame of motion, while
+ * every other page moved with the cards gliding. (That was the report: "sobald
+ * ich das obere Bild runterziehe, ist keine Animation".) Doing the FLIP here has
+ * no such blind spot, and the duration is ours.
+ */
+function glideFrom(before: Map<number, DOMRect>): void {
+  if (prefersReducedMotion()) return;
+  for (const el of cardEls()) {
+    const from = before.get(Number(el.dataset.page));
+    // the held card is hidden on purpose; only the cards giving way slide
+    if (!from || el.classList.contains("dragging")) continue;
+    const now = el.getBoundingClientRect();
+    const dx = from.left - now.left;
+    const dy = from.top - now.top;
+    if (!dx && !dy) continue;
+    if (typeof el.animate !== "function") continue;
+    // measured *before* cancelling, so a second move picks the card up where it
+    // actually is instead of snapping it into its slot first
+    glides.get(el)?.cancel();
+    glides.set(
+      el,
+      el.animate(
+        [
+          { transform: `translate3d(${dx}px, ${dy}px, 0)` },
+          { transform: "translate3d(0, 0, 0)" },
+        ],
+        { duration: GLIDE_MS, easing: GLIDE_EASE }
+      )
+    );
+  }
+}
+
+/**
+ * Write the new order, then let the grid travel into it.
+ *
+ * The snapshot is taken before the very first change of a batch, so three moves
+ * from three pointer events in one frame still start from where the cards were
+ * when the finger entered that frame.
+ */
+function reorder(from: number, to: number): void {
+  if (!pendingLayout) pendingLayout = layoutSnapshot();
+  movePage(from, to);
+  void nextTick(() => {
+    const before = pendingLayout;
+    pendingLayout = null;
+    if (before) glideFrom(before);
+  });
+}
+
 function slotCentres(): { x: number; y: number }[] {
   return cardEls().map((card) => {
     const rect = card.getBoundingClientRect();
@@ -372,9 +445,8 @@ function slotUnder(x: number, y: number): number | null {
  *
  * This is the difference between a drop marker and Google Keep: the grid
  * rearranges under the drag, so what you see while dragging is what you get.
- * `movePage` writes the order, `<TransitionGroup>` glides the cards that slide
- * out of the way, and the dragged card itself is invisible — its slot is the gap
- * the preview will drop into.
+ * `reorder` writes the order and slides the cards that give way, and the
+ * dragged card itself is invisible — its slot is the gap the preview drops into.
  */
 function aim(): void {
   if (!drag?.lifted) return;
@@ -382,7 +454,7 @@ function aim(): void {
   if (current === -1) return;
   const target = slotUnder(pointer.x, pointer.y);
   if (target === null || target === current) return;
-  movePage(current, target);
+  reorder(current, target);
   tap();
 }
 
@@ -427,7 +499,7 @@ function paintGhost(x: number, y: number): void {
 function keyMove(index: number, delta: number): void {
   const target = index + delta;
   if (target < 0 || target >= scan.pages.length) return;
-  movePage(index, target);
+  reorder(index, target);
   tap();
   moveNote.value = `Page moved to position ${target + 1} of ${scan.pages.length}`;
 }
@@ -583,11 +655,12 @@ function onDragEnd() {
     </header>
 
     <!--
-      TransitionGroup, so a reorder is a move rather than a jump: the cards that
-      slide out of the way are animated by the browser (FLIP), which is what makes
-      the live preview read as "it will land here" instead of "it flickered".
+      A reorder is a move rather than a jump: `reorder()` remembers where every
+      card was and slides the ones that give way into their new slot (see
+      glideFrom). That is what makes the live preview read as "it will land
+      here" instead of "it flickered".
     -->
-    <TransitionGroup name="card" tag="div" class="pages-grid" ref="grid">
+    <div class="pages-grid" ref="grid">
       <p v-if="!scan.pages.length" key="empty" class="pages-empty">
         <strong>No pages yet</strong>
         <span>Take a photo of a document. Nothing leaves this device.</span>
@@ -624,7 +697,7 @@ function onDragEnd() {
         <Icon name="plus" :size="24" />
         <span>Add page</span>
       </button>
-    </TransitionGroup>
+    </div>
 
     <!-- The card under the finger. Outside the grid (and outside its clipping),
          so it can hang over the edges the way a held note does. -->

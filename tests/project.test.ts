@@ -120,12 +120,17 @@ describe("dragging a page", () => {
   it("previews the move while the finger is down, like Google Keep", () => {
     // the order changes during the drag, not on drop
     expect(view).toMatch(/function aim\(\)/);
-    expect(view).toMatch(/movePage\(current, target\)/);
+    expect(view).toMatch(/reorder\(current, target\)/);
     expect(view).toMatch(/@pointerdown="onGripDown\(\$event, page\.id\)"/);
     // and the card under the finger is drawn as a floating preview
     expect(view).toMatch(/<Teleport to="body">/);
     expect(view).toMatch(/class="drag-ghost"/);
-    expect(view).toMatch(/<TransitionGroup name="card"/);
+    // the grid does its own FLIP: TransitionGroup's move animation gives up
+    // whenever its first child has no transform transition — which is exactly
+    // the dragged card — so pulling the top page down moved nothing
+    expect(view).toMatch(/function glideFrom\(/);
+    expect(view).toMatch(/el\.animate\(/);
+    expect(view).toMatch(/reorder\(current, target\)/);
   });
 
   it("listens on the page, not on the card that is about to move", () => {
@@ -162,7 +167,8 @@ describe("dragging a page", () => {
   it("leaves a gap where the page will land instead of a marker line", () => {
     expect(css).toMatch(/\.page-card\.dragging \{[^}]*opacity: 0/);
     expect(css).toMatch(/\.page-card\.dragging::after \{[^}]*dashed/);
-    expect(css).toMatch(/\.card-move \{[^}]*transition: transform/);
+    // no move class to rely on: it was defeated by `.page-card.dragging`
+    expect(css).not.toMatch(/\.card-move/);
     expect(css).toMatch(/\.drag-ghost \{[^}]*position: fixed/);
     // the old "drop here" marker is gone with the old behaviour
     expect(css).not.toMatch(/\.drop-before/);

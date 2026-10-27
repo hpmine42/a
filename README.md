@@ -99,7 +99,12 @@ camera frame — desk, shadow, skew. After is what the export produces with
   for six seconds. The drag listens on `window`, not on the card: moving a DOM
   node releases its pointer capture, so a handler on the grip died the moment the
   grid rearranged under it — which is exactly what "it hangs and cannot be
-  dragged any more" was. Letting go is a small flight, not a cut: the preview
+  dragged any more" was. The cards that give way slide into their new slot with
+  the grid's own FLIP (`glideFrom`, 190 ms) rather than a `-move` class: Vue's
+  move animation gives up when its *first* child has no transform transition,
+  and the first child is by definition the dragged card — which removes its
+  transition on purpose. So pulling the top page down moved nothing at all,
+  while every other page glided. Letting go is a small flight, not a cut: the preview
   travels the last stretch into its slot (220 ms), the ring and the lift fade out
   on the way, and the real card takes over at the moment it arrives.
 - **Tap to focus.** A tap always answers — ring where the finger was, plus a

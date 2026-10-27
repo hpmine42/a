@@ -12,6 +12,24 @@ const CARD_H = 190;
 const GAP = 12;
 const COLS = 2;
 
+type Glide = { el: Element; dx: number; dy: number; duration: number };
+
+/** jsdom has no Web Animations: record what the grid would have animated. */
+function stubAnimate(): Glide[] {
+  const flights: Glide[] = [];
+  (Element.prototype as unknown as { animate?: unknown }).animate = function (
+    this: Element,
+    frames: { transform?: string }[],
+    options: { duration?: number }
+  ) {
+    const from = frames[0]?.transform ?? "";
+    const m = /translate3d\((-?[\d.]+)px, (-?[\d.]+)px/.exec(from);
+    flights.push({ el: this, dx: m ? Number(m[1]) : 0, dy: m ? Number(m[2]) : 0, duration: options?.duration ?? 0 });
+    return { cancel() {}, finished: Promise.resolve() } as unknown as Animation;
+  };
+  return flights;
+}
+
 const rect = (left: number, top: number, width: number, height: number): DOMRect =>
   ({
     left,
@@ -105,6 +123,7 @@ beforeEach(() => {
   scan.pages.splice(0, scan.pages.length);
   scan.activeId = 0;
   stubGrid();
+  stubAnimate();
   // the grid builds a PDF when it is idle; that is not what these tests measure,
   // so the idle callback is present but never fires
   (window as unknown as { requestIdleCallback?: unknown }).requestIdleCallback = () => 0;
@@ -113,6 +132,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+  delete (Element.prototype as unknown as { animate?: unknown }).animate;
   (window as unknown as { requestIdleCallback?: unknown }).requestIdleCallback = undefined;
 });
 
@@ -143,6 +163,37 @@ describe("reordering pages", () => {
     wrapper.unmount();
   });
 
+  it("slides the other cards even when the top page is the one being dragged", async () => {
+    // Vue's own TransitionGroup move animation bails out when the first child
+    // cannot animate — and the first child *is* the dragged card, whose
+    // `.dragging` rule removes its transition. So pulling the top page down
+    // rearranged the grid with no motion at all ("keine Animation"). The grid
+    // does its own FLIP now, which has no first-child blind spot.
+    const flights = stubAnimate();
+    const wrapper = await mountGrid(3);
+
+    await drag(wrapper, 0, 2);
+
+    // page 0 went to the last slot, so the two below it had to move up
+    const moved = flights.filter((f) => !(f.el as HTMLElement).classList.contains("dragging"));
+    expect(moved.length).toBe(2);
+    for (const f of moved) {
+      expect(f.duration).toBeGreaterThan(100);
+      expect(f.duration).toBeLessThan(400); // short: the grid must not lag the finger
+    }
+    // each of them travels a real distance, not a zero-length animation
+    expect(moved.every((f) => Math.abs(f.dx) + Math.abs(f.dy) > 0)).toBe(true);
+    // the card that was in the first column came left, the one in the second row came up
+    expect(moved.some((f) => f.dx > 0)).toBe(true);
+    expect(moved.some((f) => f.dy > 0)).toBe(true);
+    // the held card is invisible, so it is not animated at all
+    expect(flights.some((f) => (f.el as HTMLElement).classList.contains("dragging"))).toBe(false);
+
+    firePointer(window, "pointerup", slotCentre(2).x, slotCentre(2).y);
+    await landed();
+    wrapper.unmount();
+  });
+
   it("keeps the new order and drops the preview when the finger lifts", async () => {
     const wrapper = await mountGrid(3);
     const before = order();
@@ -159,6 +210,28 @@ describe("reordering pages", () => {
     expect(document.querySelector(".drag-ghost")).toBeNull();
     expect(wrapper.find(".page-card.dragging").exists()).toBe(false);
     wrapper.unmount();
+  });
+
+  it("does not slide anything when the phone asks for less motion", async () => {
+    const real = window.matchMedia;
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: (query: string) => ({ matches: query.includes("reduce"), media: query, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, onchange: null, dispatchEvent: () => false }),
+    });
+    try {
+      const flights = stubAnimate();
+      const wrapper = await mountGrid(3);
+      const before = order();
+      await drag(wrapper, 0, 2);
+      // the move still happens, it just does not travel
+      expect(order()).toEqual([before[1], before[2], before[0]]);
+      expect(flights.length).toBe(0);
+      firePointer(window, "pointerup", slotCentre(2).x, slotCentre(2).y);
+      await landed();
+      wrapper.unmount();
+    } finally {
+      Object.defineProperty(window, "matchMedia", { configurable: true, value: real });
+    }
   });
 
   it("does not reorder on a press that never travels", async () => {
