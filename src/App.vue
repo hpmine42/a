@@ -7,6 +7,7 @@ import PagesView from "./components/PagesView.vue";
 import { sleep } from "./lib/anim";
 import { detectPageQuads, fullFrameQuad, type Quad } from "./lib/cv";
 import { tap, thump } from "./lib/haptics";
+import { preloadPdfWhenIdle } from "./lib/pdf";
 import { makeThumb, nextFrame } from "./lib/image";
 import {
   addPage,
@@ -367,6 +368,15 @@ onMounted(async () => {
     restoredCount.value = restored;
     window.setTimeout(() => (restoredCount.value = 0), 5200);
   }
+  /**
+   * Fetch the PDF engine now, not at the moment of export.
+   *
+   * It is 370 kB that nobody needs while framing a page, and it is also the one
+   * chunk that used to be missing from the cache on a phone that went offline
+   * before its first export — where both Save and Share could only fail. Warm it
+   * while the camera is up; the service worker keeps it.
+   */
+  preloadPdfWhenIdle();
 });
 
 onBeforeUnmount(() => {

@@ -88,8 +88,11 @@ camera frame — desk, shadow, skew. After is what the export produces with
 - **Pinch to zoom in the viewfinder**, with 0.5× / 1× / 2× chips and a switch to
   the ultra-wide lens when the phone exposes one. Everywhere else the app holds
   pinch-to-zoom shut, because it only ever fights the user.
-- **Light on first load.** jsPDF and its dependencies (~370 kB) are only
-  downloaded when a PDF is actually saved; the app itself is 53 kB gzipped.
+- **Light on first load.** The app shell is 53 kB gzipped; jsPDF and its
+  dependencies (~370 kB) are fetched in the background while the camera is up —
+  not at the moment of export, because a lazy chunk that was never fetched is
+  exactly what makes "save" fail on a phone that has gone offline since.
+  Data Saver and 2G links skip that warm-up.
 - **Installable** — a real PWA with an offline shell. Add it to the home screen
   and it keeps working with no network at all. The service worker's cache name
   is stamped with the build (`vite.config.ts`), so a deploy throws the old shell
@@ -147,6 +150,17 @@ white glyph edges survive a downscale badly, so the canvas wants more source
 pixels than it has output pixels. (Sizing the preview by the stage's height
 instead — which is what it used to do — rendered a page taller than the canvas
 and squeezed it, and that is what made Optimize look softer than the photo.)
+
+An export plans for failure, because a phone is a hostile place to build a 3000px
+document. Each page is rendered, checked, and re-rendered smaller if the browser
+handed back an empty canvas — the silent way a canvas past its memory limit
+fails, and how a PDF full of blank pages used to happen. A page that cannot be
+rendered at any size stops the export with a sentence that names the problem
+instead of a shrug. Twenty pages share a smaller pixel budget than one, because
+being killed halfway through a long export is the one failure there is no
+recovery from. And the PDF itself is built when the grid goes idle: a phone only
+lets you share a file for a few seconds after a tap, and a multi-page build takes
+longer than that — with the file ready, Share opens instantly.
 
 The crop is pulled in by 0.8%, because detection and hand-placed corners both
 tend to sit a little outside the paper — that sliver of desk is the dark line

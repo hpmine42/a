@@ -2,7 +2,15 @@
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import Icon from "./Icon.vue";
 import { tap, thump } from "../lib/haptics";
-import { buildPdf, downloadBlob, pdfFilename, type PageFormat } from "../lib/pdf";
+import {
+  buildPdf,
+  downloadBlob,
+  ExportError,
+  pdfFilename,
+  preloadPdfWhenIdle,
+  type BuiltPdf,
+  type PageFormat,
+} from "../lib/pdf";
 import { sharePdf, sharingSupported } from "../lib/share";
 import {
   clearPages,
@@ -86,9 +94,25 @@ function suggestedName(): string {
   return `Scano ${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
+/**
+ * Get the PDF engine and, when the phone is idle, the PDF itself ready.
+ *
+ * This is the grid, i.e. the screen where people export. Doing the work now
+ * means the tap on Share has a file in hand — which is the only way a share
+ * sheet can open on a phone, because the permission to share expires seconds
+ * after the tap that asked for it.
+ */
 onMounted(() => {
   if (!scan.filename) scan.filename = suggestedName();
   canShare.value = sharingSupported();
+  const idle = (cb: () => void) =>
+    typeof window.requestIdleCallback === "function"
+      ? window.requestIdleCallback(cb, { timeout: 2500 })
+      : window.setTimeout(cb, 600);
+  idle(() => {
+    preloadPdfWhenIdle();
+    if (scan.pages.length) void prepare(false);
+  });
 });
 
 onBeforeUnmount(() => {
@@ -104,24 +128,99 @@ function note(message: string) {
   resultTimer = window.setTimeout(() => (result.value = null), 4200);
 }
 
-async function savePdf() {
-  if (!scan.pages.length || busy.value) return;
+/** Anything about the project the PDF depends on. */
+function revision(): string {
+  return [
+    scan.format,
+    scan.filename,
+    ...scan.pages.map((p) => `${p.id}:${p.rotation}:${p.opts.optimize ? 1 : 0}`),
+  ].join("|");
+}
+
+/**
+ * A built PDF that is still current.
+ *
+ * The reason this exists is not speed: a phone only lets you share a file for a
+ * few seconds after a tap, and building a multi-page PDF takes longer than that.
+ * Building ahead means the *share* tap can hand over a ready file immediately,
+ * and a second tap after a slow first one always works.
+ */
+const prepared = ref<BuiltPdf | null>(null);
+let preparedKey = "";
+/** A build that is running right now, so two taps cannot start two builds. */
+let inFlight: Promise<BuiltPdf | null> | null = null;
+
+const freshPrepared = (): BuiltPdf | null =>
+  prepared.value && preparedKey === revision() ? prepared.value : null;
+
+/**
+ * Have a current PDF ready.
+ *
+ * `interactive` decides whether the person waiting sees progress: a build that
+ * starts on its own when the grid opens must not hijack the buttons, while one
+ * started by a tap must say what it is doing.
+ */
+async function prepare(interactive: boolean): Promise<BuiltPdf | null> {
+  const fresh = freshPrepared();
+  if (fresh) return fresh;
+
+  if (!inFlight) {
+    inFlight = (async () => {
+      try {
+        const built = await buildPdf(
+          scan.pages,
+          scan.format,
+          (done, total) => (progress.value = { done, total }),
+          scan.filename
+        );
+        prepared.value = built;
+        preparedKey = revision();
+        return built;
+      } catch (err) {
+        console.error("[scano] could not build the PDF", err);
+        if (interactive) error.value = exportMessage(err, "build");
+        // a background failure is not news; a tapped one is
+        return null;
+      } finally {
+        inFlight = null;
+      }
+    })();
+  }
+
+  if (!interactive) return inFlight;
   busy.value = true;
   error.value = null;
   try {
-    const { blob, filename: name } = await buildPdf(
-      scan.pages,
-      scan.format,
-      (done, total) => (progress.value = { done, total }),
-      scan.filename
-    );
-    downloadBlob(blob, name);
-    note(`Saved ${name}`);
-  } catch (err) {
-    console.error(err);
-    error.value = "Export failed — try again.";
+    const built = await inFlight;
+    if (!built) error.value = exportMessage(new ExportError("render"), "build");
+    return built;
   } finally {
     busy.value = false;
+  }
+}
+
+/** The truth, in words a person can act on. */
+function exportMessage(err: unknown, stage: "build" | "download"): string {
+  if (err instanceof ExportError) {
+    return err.reason === "engine"
+      ? "The PDF engine did not load — check your connection, then try again."
+      : "One page could not be rendered — open it, re-crop it, and try again.";
+  }
+  return stage === "download"
+    ? "Could not save the file — try again."
+    : "Could not build the PDF — try again.";
+}
+
+async function savePdf() {
+  if (!scan.pages.length || busy.value) return;
+  const built = await prepare(true);
+  if (!built) return;
+  try {
+    downloadBlob(built.blob, built.filename);
+    note(`Saved ${built.filename}`);
+  } catch (err) {
+    console.error(err);
+    error.value = exportMessage(err, "download");
   }
 }
 
@@ -131,27 +230,24 @@ const shareable = computed(() => canShare.value && !busy.value && scan.pages.len
 
 async function shareOut() {
   if (!scan.pages.length || busy.value) return;
-  busy.value = true;
-  error.value = null;
-  try {
-    const { blob, filename: name } = await buildPdf(
-      scan.pages,
-      scan.format,
-      (done, total) => (progress.value = { done, total }),
-      scan.filename
-    );
-    const outcome = await sharePdf(blob, name);
-    if (outcome === "shared") note("Shared");
-    else if (outcome === "unsupported" || outcome === "failed") {
-      // no share sheet after all: the honest fallback is the file
-      downloadBlob(blob, name);
-      note(`Saved ${name}`);
+  // The fast path is the important one: a ready file shares inside the tap.
+  const ready = freshPrepared();
+  const built = ready ?? (await prepare(true));
+  if (!built) return;
+  const outcome = await sharePdf(built.blob, built.filename);
+  if (outcome === "shared") note("Shared");
+  else if (outcome === "stale") note("PDF ready — tap Share again");
+  else if (outcome === "dismissed") {
+    /* the user closed the sheet; nothing to report */
+  } else if (outcome === "unsupported" || outcome === "failed") {
+    // no share sheet after all: the honest fallback is the file itself
+    try {
+      downloadBlob(built.blob, built.filename);
+      note(`Saved ${built.filename}`);
+    } catch (err) {
+      console.error(err);
+      error.value = exportMessage(err, "download");
     }
-  } catch (err) {
-    console.error(err);
-    error.value = "Export failed — try again.";
-  } finally {
-    busy.value = false;
   }
 }
 

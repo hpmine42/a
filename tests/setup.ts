@@ -134,6 +134,27 @@ export function fakeCameraStream() {
   } as unknown as MediaStream;
 }
 
+/**
+ * Canvas behaviour the app has to survive.
+ *
+ * A canvas past the browser's limits does not throw — `toDataURL` quietly hands
+ * back "data:," and every page after it is blank. `blank` reproduces that, and
+ * `calls` counts the attempts so a retry is visible.
+ */
+export const fakeCanvas = {
+  blank: false,
+  /** Blank only for the first n calls — a transient failure, not a dead canvas. */
+  blankCalls: 0,
+  calls: 0,
+  /** A real-looking base64 payload: long enough to be a plausible JPEG. */
+  url: "data:image/jpeg;base64," + "A".repeat(2000),
+  reset() {
+    fakeCanvas.blank = false;
+    fakeCanvas.blankCalls = 0;
+    fakeCanvas.calls = 0;
+  },
+};
+
 export function installDomStubs() {
   const g = globalThis as unknown as Record<string, unknown>;
 
@@ -143,7 +164,11 @@ export function installDomStubs() {
     return makeContext(this);
   } as unknown as typeof HTMLCanvasElement.prototype.getContext;
 
-  HTMLCanvasElement.prototype.toDataURL = () => "data:image/jpeg;base64,AAAA";
+  HTMLCanvasElement.prototype.toDataURL = () => {
+    fakeCanvas.calls++;
+    const transient = fakeCanvas.calls <= fakeCanvas.blankCalls;
+    return fakeCanvas.blank || transient ? "data:," : fakeCanvas.url;
+  };
 
   // jsdom lays nothing out: the overlay would report 0x0 and every "where on the
   // screen did that tap land" calculation would bail out before it ran
@@ -161,7 +186,11 @@ export function installDomStubs() {
     this: HTMLCanvasElement,
     callback: BlobCallback
   ) {
-    callback(new Blob(["jpeg"], { type: "image/jpeg" }));
+    fakeCanvas.calls++;
+    const transient = fakeCanvas.calls <= fakeCanvas.blankCalls;
+    // a canvas that cannot be encoded hands back null, exactly like Chrome
+    if (fakeCanvas.blank || transient) return callback(null);
+    callback(new Blob([fakeCanvas.url.slice(23)], { type: "image/jpeg" }));
   } as unknown as typeof HTMLCanvasElement.prototype.toBlob;
 
   class RO {

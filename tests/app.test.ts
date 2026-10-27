@@ -3,7 +3,7 @@ import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 import App from "../src/App.vue";
 import { clearPages, flushSave, scan } from "../src/lib/store";
 import { memoryStore, useProjectStore } from "../src/lib/storage";
-import { allowCamera, denyCamera, fakeCamera, installDomStubs } from "./setup";
+import { allowCamera, denyCamera, fakeCamera, fakeCanvas, installDomStubs } from "./setup";
 
 installDomStubs();
 
@@ -59,6 +59,7 @@ async function choose(wrapper: VueWrapper, label: string) {
 beforeEach(() => {
   useProjectStore(null);
   fakeCamera.reset();
+  fakeCanvas.reset();
   clearPages();
   window.localStorage.clear();
   denyCamera();
@@ -764,6 +765,96 @@ describe("focusing by tapping the picture", () => {
 
     expect(wrapper.find(".focus-ring").exists()).toBe(false);
     expect(fakeCamera.applied.length).toBe(before);
+    wrapper.unmount();
+  });
+});
+
+describe("exporting and sharing", () => {
+  /** A browser that can put a PDF into the share sheet. */
+  function withShareSheet(behaviour: () => Promise<void> = async () => undefined) {
+    const share = vi.fn(behaviour);
+    Object.defineProperty(navigator, "canShare", {
+      configurable: true,
+      value: () => true,
+    });
+    Object.defineProperty(navigator, "share", { configurable: true, value: share });
+    return share;
+  }
+
+  async function twoPageScan() {
+    stubDemoFetch();
+    const wrapper = mount(App);
+    await tick(20);
+    await shootDemo(wrapper);
+    await choose(wrapper, "Crop it by hand");
+    await finish(wrapper);
+    // the grid prepares the PDF while the phone is idle
+    await tick(900);
+    return wrapper;
+  }
+
+  it("shares a PDF that was prepared before the tap", async () => {
+    const share = withShareSheet();
+    const wrapper = await twoPageScan();
+
+    const button = wrapper.find("button.share-pdf");
+    expect(button.exists()).toBe(true);
+    const rendersBefore = fakeCanvas.calls;
+
+    await button.trigger("click");
+    await tick(200);
+
+    expect(share).toHaveBeenCalledTimes(1);
+    const passed = share.mock.calls[0] as unknown as [ShareData];
+    const files = passed[0].files!;
+    expect(files[0].name).toMatch(/\.pdf$/);
+    expect(wrapper.find(".pages-result").text()).toContain("Shared");
+    // a ready file means no second render pass
+    expect(fakeCanvas.calls).toBe(rendersBefore);
+    wrapper.unmount();
+  });
+
+  it("keeps the file when the share sheet refuses a late tap, and shares on the next one", async () => {
+    let attempts = 0;
+    const share = withShareSheet(async () => {
+      attempts++;
+      // what a phone does when the build outlived the gesture
+      if (attempts === 1) {
+        const err = new DOMException("Must be handling a user gesture", "NotAllowedError");
+        throw err;
+      }
+    });
+    const wrapper = await twoPageScan();
+
+    const button = wrapper.find("button.share-pdf");
+    await button.trigger("click");
+    await tick(200);
+
+    // not an error, and not a lost PDF either: the answer is another tap
+    expect(wrapper.find(".pages-result").text()).toContain("tap Share again");
+    const renders = fakeCanvas.calls;
+
+    await wrapper.find("button.share-pdf").trigger("click");
+    await tick(200);
+    expect(share).toHaveBeenCalledTimes(2);
+    expect(wrapper.find(".pages-result").text()).toContain("Shared");
+    expect(fakeCanvas.calls).toBe(renders);
+    wrapper.unmount();
+  });
+
+  it("says what actually went wrong instead of a generic shrug", async () => {
+    withShareSheet();
+    fakeCanvas.blank = true;
+    const wrapper = await twoPageScan();
+
+    await wrapper.find("button.share-pdf").trigger("click");
+    await tick(200);
+
+    const text = wrapper.find(".pages-error").text();
+    // the page is named, and the fix is something the user can actually do
+    expect(text).toContain("could not be rendered");
+    expect(text).toContain("re-crop");
+    expect(text).not.toContain("Export failed");
     wrapper.unmount();
   });
 });
