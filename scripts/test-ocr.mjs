@@ -26,7 +26,12 @@ if (!existsSync(LANG) || !existsSync(IMAGE)) {
   process.exit(1);
 }
 
-const EXPECTED = ["ACME", "INVOICE", "1,620.00", "Hosting", "14 Days"];
+/**
+ * Words a scanner must not miss: the masthead, the document type, a figure with
+ * thousands separators, a table row, and the small print at the bottom — small
+ * type at the edge of the sheet is where a bad B&W pass shows up first.
+ */
+const EXPECTED = ["ACME", "INVOICE", "1,620.00", "Hosting", "Barclays"];
 
 let failures = 0;
 const check = (name, ok, detail) => {

@@ -46,8 +46,9 @@ phone. MIT, no backend, no analytics, no CDN.
 </tr>
 </table>
 
-And the same page at 2×, because a full page shrunk into a README column is not
-where you can judge a scanner:
+A full page shrunk into a README column is not where you can judge a scanner, so
+here is a strip at **100%** — the crop is 808 px wide, which is what GitHub
+renders, so every pixel below is the pipeline's own:
 
 <table>
 <tr>
@@ -56,14 +57,17 @@ where you can judge a scanner:
 </tr>
 <tr>
 <td align="center"><sub>straightened, as photographed</sub></td>
-<td align="center"><sub><i>Optimize</i></sub></td>
+<td align="center"><sub><i>Optimize</i> — ink mapping, not a threshold</sub></td>
 </tr>
 </table>
 
-Both pictures are produced by the app's own pipeline, not by hand: `npm run
-docs:images` detects the page in the demo photo, warps it with the same inset the
-app uses, runs *Optimize* at the same strength, and writes the four files. If a
-change ever makes the output worse, the picture gets worse with it.
+Both pictures come out of the app's own code: `npm run docs:images` renders a
+3400×2550 photo of the demo sheet (what a phone hands the app), detects it, warps
+it with the app's inset, runs *Optimize* with the app's own `OPTIMIZE` settings and
+writes the four files. If a change ever makes the output worse, the pictures get
+worse with it — which is exactly how the "the text looks bad" report was fixed:
+the old `docs/detail.jpg` was a 2× blow-up of a 600 px page, and the pipeline
+behind it really did break table rules into dashes.
 
 ## What it does
 
@@ -222,29 +226,50 @@ light is never even. So `enhance()` works in this order:
    fight, which is what used to leave grey blotches and grey paper.
 2. **Stretch the levels** on the 2%–98.5% percentiles of the *lit* page,
    ignoring the tails.
-3. **Smooth** with a 3×3 box in Optimize mode — a threshold cannot tell sensor
-   grain from a full stop, so the grain goes first. (Colour mode sharpens with
-   an unsharp mask instead; there the pixels are the product.)
-4. **Map paper → ink** (B&W). Not a threshold: for every pixel the pass takes
-   the local maximum and minimum (a sliding-window deque, so it costs the same
-   whatever the window size) and reads the pixel as *how far between the paper
-   and the ink of this neighbourhood* it sits. A stroke centre lands at 100%
-   ink, its antialiased edge at 50%, blank paper at 0%.
+3. **Sharpen** with an unsharp mask before anything decides black or white. A
+   200 DPI photo of a sheet has hairlines about one pixel wide, and both the
+   warp's interpolation and the smoothing below soften them into grey smudges;
+   putting the edge back is what lets the mapping see a clean edge instead of
+   having to guess. (The smoothing that follows touches only the *statistics* —
+   the pixel being classified is never blurred.)
+4. **Estimate the paper** with a maximum over small blocks: ink only ever makes a
+   pixel darker than its paper, so the brightest value in a neighbourhood *is*
+   the paper. A plain blur would be pulled down by the ink it covers, which
+   hollows out letters — dark rim, pale middle.
+5. **Map paper → ink** (B&W). One ink level for the page (the 1st percentile of
+   the normalised image) and one paper value per pixel; a pixel's coverage is
+   `(paper − pixel) / (paper − ink)`. A stroke centre lands at 100% ink, its
+   antialiased edge at 50%, blank paper at 0% — and a one-pixel rule is *thin,
+   not faint*, so it stays a rule everywhere along its length.
 
-That last step is a rewrite, and it is the one that made text readable. The old
-pass was a Sauvola threshold: compare the pixel with a local mean and decide
-black or white. Anything noticeably darker than its surroundings became *solid*
-black — so thin strokes fattened, neighbouring letters merged, and a scanned "rn"
-came out as an "m". A photocopier from 1995, at the exact moment a phone photo
-needs the opposite. Mapping between the local white and the local black instead
-keeps the weight the letters had on the sheet: thin stays thin, and the
-counters of an "e" or an "a" survive. The window is sized to cover a letter
-(~1/70 of the short side); a neighbourhood with less than ~30 levels of
-contrast holds no text and is paper by definition, which removes a shadow
-without leaving a grey film.
+Step 5 has now been rewritten twice, and each rewrite came from a report about
+text quality:
+
+- The first version was a Sauvola threshold: compare the pixel with a local mean
+  and decide black or white. Anything darker than its surroundings became *solid*
+  black, so thin strokes fattened, neighbouring letters merged, and a scanned
+  "rn" came out as an "m".
+- The second mapped each pixel between the local **maximum and minimum** of a
+  blurred copy. That is better, but not right: a window's maximum is a paper value
+  where the window is empty and a grey value where a rule happens to fill it, so
+  the same stroke came out black in one place and pale three lines further down,
+  thin table rules dissolved into dashes, and a light grey table band flickered
+  between "paper" and "ink".
+- What is there now takes the paper *once* for the page and the ink *once* for the
+  page, so a stroke has the same weight at the top edge of the sheet as at the
+  bottom, a grey band is paper everywhere, and hairlines survive because nothing
+  deletes a dark pixel for being one pixel wide.
+
+The despeckle afterwards removes a lone *mid-grey* pixel — grain — and leaves a
+lone black one alone, because that is a dot in the print, not noise.
 
 Imports are read at up to 3600px, exports at 3000px, and neither is ever scaled
-above what the photo actually contains. Anything that would exceed 8 megapixels
+above what the photo actually contains. The *sample* was the other half of the
+"the text looks bad" report, by the way: the demo photo put the sheet at 597 px,
+where a line of body text is six pixels tall and every Optimize pass looks ragged.
+`scripts/make-sample.ts` now composes the invoice at 200 DPI and photographs it at
+2400×1800 for the app (the sheet 1750 px across, 210 DPI) and at 3400×2550 for the
+README pictures. Anything that would exceed 8 megapixels
 or 4096px on a side is rendered a little smaller on purpose: past those numbers
 iOS Safari hands back a blank canvas instead of an error, and a blank page in a
 PDF is worse than a page that is 20% smaller.
@@ -366,7 +391,8 @@ src/lib/storage.ts IndexedDB (with an in-memory twin the tests drive)
 src/lib/share.ts  the share sheet, and the download it falls back to
 src/lib/fit.ts    the UI scale that undoes a browser's desktop-mode shrink
 scripts/          test-cv.ts (real pipeline), check-dist.mjs (deploy guard),
-                  fetch-ocr-assets.mjs (the OCR engine), make-demo.ts (docs/)
+                  fetch-ocr-assets.mjs (the OCR engine), make-sample.ts (the demo
+                  photo, composed at 200 DPI), make-demo.ts (the README pictures)
 ```
 
 Nothing in `src/lib` sends anything anywhere: the text engine is fetched from
@@ -386,7 +412,7 @@ worker does not carry every bundle `index.html` needs.
 ```bash
 npm run typecheck  # vue-tsc, strict
 npm run test:cv    # real CV pipeline on the demo photo, with assertions
-npm run test:ocr   # the real text engine on the same page (65 words, ~1s)
+npm run test:ocr   # the real text engine on the same page (114 words, ~2s)
 npm test           # UI flows, detection on synthetic scenes, loupe maths, PDF geometry
 ```
 
@@ -395,8 +421,12 @@ invoice's number, its total or its payment terms are not in the output — a moc
 recogniser can prove the wiring, not that the shipped language model works.
 
 `test:cv` is the honest one: it detects the page in `public/samples/letter.jpg`,
-checks the corners against hand-measured coordinates, and fails the build if the
-detector drifts. `tests/detect.test.ts` renders synthetic desks — dark, warm,
+checks the corners against the coordinates the sample was *composed* with
+(`scripts/make-sample.ts` prints them), and fails the build if the detector drifts.
+`tests/optimize.test.ts` holds the Optimize pass to what a scanner has to do: a
+one-pixel rule stays a rule, a stroke keeps its weight across a lamp gradient, a
+grey band stays paper, and on the real demo photo every table rule is continuous
+from one end to the other. `tests/detect.test.ts` renders synthetic desks — dark, warm,
 low-contrast, empty — and asserts both the found corners and the *refusal* to
 find a page where there is none. `tests/pdf.test.ts` covers the placement maths, because getting
 that wrong prints cropped documents, `tests/geometry.test.ts` pins the

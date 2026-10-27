@@ -9,7 +9,7 @@
  */
 import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import jpeg from "jpeg-js";
-import { detectPageQuad, enhance, outputSize, warp } from "../src/lib/cv";
+import { detectPageQuad, enhance, OPTIMIZE, outputSize, warp } from "../src/lib/cv";
 
 /* ImageData does not exist in Node; the CV code only needs the shape. */
 class ImageDataShim {
@@ -32,15 +32,19 @@ class ImageDataShim {
 
 const SOURCE = "public/samples/letter.jpg";
 /**
- * Corners measured on the demo photo by scanning the paper/desk boundary
- * column by column (TL, TR, BR, BL). The earlier numbers were eyeballed, and a
- * 35px error in one corner was quietly tolerated for several rounds.
+ * The corners the demo photo was *built* with (TL, TR, BR, BL).
+ *
+ * Not measured off the picture and not copied from what the detector said:
+ * `scripts/make-sample.ts` composes the sheet with these very numbers and prints
+ * them, so this is the ground truth of the scene rather than a second opinion on
+ * it. The old numbers were eyeballed, which is how a 35px error in one corner sat
+ * in the logs for several rounds.
  */
 const EXPECTED = [
-  { x: 300, y: 160 },
-  { x: 756, y: 86 },
-  { x: 980, y: 700 },
-  { x: 397, y: 838 },
+  { x: 622.2, y: 161.7 },
+  { x: 1716.0, y: 161.7 },
+  { x: 1777.8, y: 1710.3 },
+  { x: 684.0, y: 1710.3 },
 ];
 /** Tightened after round 12: the detector now lands within a few pixels on this
  *  photo, and a loose tolerance is what let a 50px crop error ship unnoticed. */
@@ -99,7 +103,7 @@ const inkRatio = (img: ImageData) => {
   return dark / (img.width * img.height);
 };
 
-const bw = enhance(warped, { mode: "bw", brightness: 0, contrast: 0, strength: 55 });
+const bw = enhance(warped, OPTIMIZE);
 const bwInk = inkRatio(bw);
 check("B&W keeps text and clears paper", bwInk > 0.005 && bwInk < 0.2, `ink ${(bwInk * 100).toFixed(2)}%`);
 

@@ -1,17 +1,26 @@
 /**
  * Rebuild the before/after pictures in the README from the real pipeline.
  *
- * The old `docs/after.jpg` was a crop of an early export and the text in it was
- * barely readable at README width — a "before / after" that makes the after look
- * blurry is worse than none. This runs the same detection, warp and Optimize
- * pass the app runs (same inset, same strength, same order) and writes a page at
- * a size where the letters survive being scaled into a README column.
+ * Two things made the old pair useless as evidence:
+ *
+ *  - the sample photo was 1200px wide, which put the page at 597px. Body text
+ *    was six pixels tall there, so *every* Optimize pass looks ragged, and the
+ *    "after" was effectively a 2× blow-up of a 1-bit bitmap. The photo is now
+ *    rendered at 2400×1800 by `scripts/make-sample.ts`, at 200 DPI on the sheet.
+ *  - the page was rendered at 1500px on the long side and then shrunk into a
+ *    README column, which throws away exactly the detail the picture is meant to
+ *    prove. The page is written at its own resolution now (up to 2200px, the
+ *    size the app renders for export), and the README displays it *large*.
+ *
+ * The pipeline is the app's own: same detection, same inset, same strength, same
+ * order. If Optimize ever gets worse, these pictures get worse with it — that is
+ * the point of generating them instead of keeping a flattering one.
  *
  *   npm run docs:images
  */
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import jpeg from "jpeg-js";
-import { detectPageQuad, enhance, outputSize, warp, insetQuad } from "../src/lib/cv";
+import { detectPageQuad, enhance, insetQuad, OPTIMIZE, outputSize, warp } from "../src/lib/cv";
 import { EDGE_INSET } from "../src/lib/store";
 
 /* ImageData does not exist in Node; the CV code only needs the shape. */
@@ -33,11 +42,18 @@ class ImageDataShim {
 }
 (globalThis as unknown as { ImageData: typeof ImageDataShim }).ImageData = ImageDataShim;
 
-const SOURCE = "public/samples/letter.jpg";
-/** The page is rendered at this long side: enough for 11px text in a README. */
-const AFTER_SIDE = 1500;
+/**
+ * The high-resolution sibling of the demo photo, written by `make-sample.ts`.
+ *
+ * A phone hands the app a 3600px photo; the shipped demo is 2400px because it is
+ * precached for offline use. The README shows what the app does with a real
+ * photo, so it is built from the big one.
+ */
+const SOURCE = ".tmp/letter-hi.jpg";
+/** The page is rendered at this long side — the export size, not a preview. */
+const AFTER_SIDE = 2200;
 /** The camera photo is scaled down to this, so the two images match in width. */
-const BEFORE_SIDE = 1200;
+const BEFORE_SIDE = 1400;
 
 const raw = jpeg.decode(readFileSync(SOURCE), { useTArray: true });
 const photo = new ImageDataShim(
@@ -94,21 +110,16 @@ if (!quad) {
 const crop = insetQuad(quad, EDGE_INSET);
 const size = outputSize(crop, AFTER_SIDE);
 const straight = warp(photo, crop, size.w, size.h);
-const page = enhance(straight, {
-  mode: "bw",
-  brightness: 0,
-  contrast: 0,
-  // the Optimize default the app uses
-  strength: 58,
-});
+// exactly what the Optimize switch does, from the same constant the app uses
+const page = enhance(straight, OPTIMIZE);
 
 /**
- * A detail crop, 2× up.
+ * A detail crop at 100%, not a blow-up.
  *
- * The page is only ~590px wide in the demo photo, and a README column is
- * narrower still — at that size the whole point (that the letters come out
- * clean) is invisible. This is the header and the table, doubled: the same
- * pixels the app produced, big enough to actually read.
+ * The pair is displayed at half the README width, so a crop of the scanned page
+ * arrives on screen at roughly its own pixel size — which is the only honest way
+ * to judge it. A 2× enlargement used to be necessary because the source page was
+ * 600px wide; now it would only magnify antialiasing.
  */
 function detail(img: ImageData, x0: number, y0: number, x1: number, y1: number, scale: number) {
   const sx = Math.round(x0 * img.width);
@@ -147,13 +158,22 @@ mkdirSync("docs", { recursive: true });
  * The same region twice, at 2×: the straightened photo, and what Optimize makes
  * of it. One look at this pair says more about the pipeline than any paragraph.
  */
-const REGION: [number, number, number, number] = [0.05, 0.2, 0.75, 0.55];
-const close = detail(page, ...REGION, 2.2);
-const closeBefore = detail(straight, ...REGION, 2.2);
-writeFileSync("docs/detail.jpg", encode(close, 88));
-writeFileSync("docs/detail-before.jpg", encode(closeBefore, 88));
-writeFileSync("docs/before.jpg", encode(fit(photo, BEFORE_SIDE), 82));
-writeFileSync("docs/after.jpg", encode(page, 86));
+/**
+ * The strip the README shows, sized so GitHub renders it at 1:1.
+ *
+ * A README column is about 880px wide. Displaying a 1554px page there throws a
+ * third of the pixels away and re-softens every glyph — which is how a genuinely
+ * sharp scan ends up looking blurry in a screenshot. This crop is ~880px wide, so
+ * what a reader sees is the pipeline's own output, pixel for pixel.
+ */
+const REGION: [number, number, number, number] = [0.05, 0.06, 0.57, 0.28];
+const close = detail(page, ...REGION, 1);
+// the photographed version, cut from the *straightened* page so the two line up
+const closeBefore = detail(straight, ...REGION, 1);
+writeFileSync("docs/detail.jpg", encode(close, 92));
+writeFileSync("docs/detail-before.jpg", encode(closeBefore, 92));
+writeFileSync("docs/before.jpg", encode(fit(photo, BEFORE_SIDE), 84));
+writeFileSync("docs/after.jpg", encode(page, 92));
 console.log(
   `docs/detail.jpg + docs/detail-before.jpg ${close.width}×${close.height}\ndocs/before.jpg ${Math.min(BEFORE_SIDE, photo.width)}px · docs/after.jpg ${page.width}×${page.height} (${Math.round(
     encode(page, 86).length / 1024

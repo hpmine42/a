@@ -1202,12 +1202,25 @@ export function warp(img: ImageData, quad: Quad, w: number, h: number): ImageDat
 
 export type Mode = "bw" | "gray" | "color";
 
+/**
+ * The settings the Optimize switch uses, in one place.
+ *
+ * Optimize is offered as a single switch, but the numbers behind it have to agree
+ * in three code paths (preview, export, README pictures) — and a preview that is
+ * tuned differently from the export is a scan that changes when you save it.
+ */
+export const OPTIMIZE = { mode: "bw", brightness: 0, contrast: 0, strength: 58 } as const;
+
 export type EnhanceOpts = {
   mode: Mode;
   brightness: number; // -50..50
   contrast: number; // -50..50
   /** 0..100, only for bw: how aggressive the adaptive threshold is */
   strength?: number;
+  /** Unsharp amount applied before the ink mapping, 0 = off. */
+  sharpen?: number;
+  /** The neighbourhood the paper and ink values come from (px, 0 = derive). */
+  window?: number;
 };
 
 /* Everything below runs at the caller's resolution — up to 3000px on the long
@@ -1321,52 +1334,6 @@ function rowSampler(map: Float32Array, mw: number, mh: number, w: number, h: num
   };
 }
 
-/**
- * Local minimum (or maximum) along a set of parallel lines, sliding window.
- *
- * `lineGap` is the distance between two lines and `step` the distance between
- * two samples on a line, so one function does rows (gap w, step 1) and columns
- * (gap 1, step w) without a transposed copy of the image.
- *
- * A monotonic deque keeps it O(samples) whatever the radius, which is what lets
- * the window be sized for text rather than for speed.
- */
-function lineExtremes(
-  src: Float32Array,
-  out: Float32Array,
-  lines: number,
-  samples: number,
-  lineGap: number,
-  step: number,
-  r: number,
-  wantMax: boolean
-): void {
-  const deque = new Int32Array(samples + 1);
-  for (let line = 0; line < lines; line++) {
-    let head = 0;
-    let tail = 0;
-    // `base` walks the line once; values are read relative to it
-    const base = line * lineGap;
-    const at = (i: number) => src[base + i * step];
-    for (let i = 0; i < samples + r; i++) {
-      if (i < samples) {
-        const v = at(i);
-        while (tail > head) {
-          const back = at(deque[tail - 1]);
-          if (wantMax ? back <= v : back >= v) tail--;
-          else break;
-        }
-        deque[tail++] = i;
-      }
-      const centre = i - r;
-      if (centre >= 0) {
-        // window is [centre - r, centre + r]; anything older has left it
-        while (deque[head] < centre - r) head++;
-        out[base + centre * step] = at(deque[head]);
-      }
-    }
-  }
-}
 
 /**
  * Local minimum and maximum, separable: rows first, then columns.
@@ -1375,20 +1342,6 @@ function lineExtremes(
  * pixel be described as "this far between paper and ink" instead of "darker than
  * a number" — and that is what keeps a thin stroke thin (see `enhance`).
  */
-function minMax(plane: Float32Array, w: number, h: number, radius: number) {
-  const r = Math.max(1, Math.round(radius));
-  const tmpMin = new Float32Array(w * h);
-  const tmpMax = new Float32Array(w * h);
-  const lo = new Float32Array(w * h);
-  const hi = new Float32Array(w * h);
-  // rows: one line per image row, samples next to each other
-  lineExtremes(plane, tmpMin, h, w, w, 1, r, false);
-  lineExtremes(plane, tmpMax, h, w, w, 1, r, true);
-  // columns: one line per image column, samples stacked a row apart
-  lineExtremes(tmpMin, lo, w, h, 1, w, r, false);
-  lineExtremes(tmpMax, hi, w, h, 1, w, r, true);
-  return { lo, hi };
-}
 
 function histOf(plane: Uint8Array | Float32Array, length = plane.length): Uint32Array {
   const hist = new Uint32Array(256);
@@ -1457,6 +1410,56 @@ function sharpen(plane: Uint8Array, w: number, h: number, amount: number): Uint8
       const sharp = v + ((v - b) * amount) | 0;
       out[row + x] = sharp < 0 ? 0 : sharp > 255 ? 255 : sharp;
     }
+  }
+  return out;
+}
+
+/**
+ * How bright this part of the *paper* is, all over the page.
+ *
+ * Not a plain blur: a blur is pulled down by the ink it covers, and where the
+ * ink is a glyph the local paper value dips in the middle of the stroke — which
+ * makes letters hollow, dark at the edges and pale in the middle. Ink only ever
+ * makes a pixel darker than its paper, so the honest estimate is a maximum: the
+ * brightest pixel in a neighbourhood is paper.
+ *
+ * Computed as a max over small blocks (a hundredth of the work of a full
+ * morphological pass), smoothed on the small map, and upsampled through the same
+ * row sampler the lighting map uses. The blocks are a few pixels wide, so a
+ * stroke one or two pixels thick cannot fill one — which is what keeps the
+ * estimate on the paper even inside dense text.
+ */
+function paperEstimate(src: Uint8Array, w: number, h: number): Float32Array {
+  const step = Math.max(2, Math.round(Math.max(w, h) / 220));
+  const mw = Math.max(1, Math.ceil(w / step));
+  const mh = Math.max(1, Math.ceil(h / step));
+  const pooled = new Float32Array(mw * mh);
+  for (let my = 0; my < mh; my++) {
+    const y0 = my * step;
+    const y1 = Math.min(h, y0 + step);
+    for (let mx = 0; mx < mw; mx++) {
+      const x0 = mx * step;
+      const x1 = Math.min(w, x0 + step);
+      let best = 0;
+      for (let y = y0; y < y1; y++) {
+        const row = y * w;
+        for (let x = x0; x < x1; x++) {
+          const v = src[row + x];
+          if (v > best) best = v;
+        }
+      }
+      pooled[my * mw + mx] = best;
+    }
+  }
+  // a max filter leaves block edges behind; two small blurs turn it into a map of
+  // the light on the page, which is what it is meant to be
+  const smooth = blur(blur(pooled, mw, mh, 1), mw, mh, 1);
+  const sample = rowSampler(smooth, mw, mh, w, h);
+  const out = new Float32Array(w * h);
+  const row = new Float32Array(w);
+  for (let y = 0; y < h; y++) {
+    sample(y, row);
+    out.set(row, y * w);
   }
   return out;
 }
@@ -1587,37 +1590,90 @@ export function enhance(src: ImageData, opts: EnhanceOpts): ImageData {
    * had on the sheet. Flat areas (contrast below a floor) are paper by
    * definition, which is also what removes a shadow without turning it grey.
    */
-  const smooth = blur(norm, w, h, 1);
-  // The window has to cover a letter and a little more: too small and the
-  // inside of a bold stroke becomes "paper" again, too large and a shadow
-  // gradient starts to look like ink.
-  const radius = Math.max(4, Math.round(Math.min(w, h) / 70));
-  const { lo: darkest, hi: paper } = minMax(smooth, w, h, radius);
+  /* Sharpen *before* the ink mapping, not after.
+   *
+   * A 200 DPI photo of a sheet drawn at 0.7× has hairlines about one pixel wide;
+   * the warp's bilinear pass and the blur below both soften those to a grey
+   * smudge, and the local paper/ink comparison then has almost nothing to work
+   * with — the stroke keeps whatever grey it had, the neighbouring rule breaks up
+   * into dashes, and small type reads "ragged" even though every step did what it
+   * promised. An unsharp pass puts the edge back where it was on the paper, and
+   * the mapping only has to decide black-or-white for a clean edge. */
+  /* ---------------------------------------------------------------- mapping
+   *
+   * Describe every pixel by *how much ink* it carries, against the paper around
+   * it, and write that as black on white.
+   *
+   * What is here now replaces an ink/paper-per-window mapping (local min and max
+   * from a blurred copy). That approach reads well in a paragraph and fails on a
+   * page: the window's max is a paper value where the window is empty and a grey
+   * value where a rule happens to fill it, so the same stroke came out solid
+   * black in one place and pale grey three lines further down, thin table rules
+   * dissolved into dashes, and a light grey table band was alternately "paper"
+   * and "ink" depending on what else the window happened to contain.
+   *
+   * The paper, though, does not vary per 20 pixels — it varies slowly, with the
+   * lamp. So the paper is estimated once, from a wide blur (the same map the
+   * lighting pass uses, at full resolution), and the ink level is one number for
+   * the page: the 1st percentile of the normalised image. A stroke's coverage is
+   * then (paper - pixel) / (paper - ink), which is what "how black is this
+   * stroke" actually means, and it is the same scale everywhere on the page.
+   *
+   * Two consequences worth stating:
+   *
+   *  - thin strokes survive. A one-pixel rule is thin, not faint: with the grey
+   *    itself deciding instead of a local max, it lands at that same coverage
+   *    everywhere along its length instead of breaking into dashes.
+   *  - the ramp is soft, so the glyph edges stay antialiased and text keeps the
+   *    weight it had on paper rather than being thickened by a hard threshold.
+   */
+  const sharpened = sharpen(norm, w, h, opts.sharpen ?? 0.55);
+  const paper = paperEstimate(sharpened, w, h);
+  // one ink level for the page: the darkest 1% of the normalised image, which is
+  // the printed ink and not the noise around it
+  const normHist = histOf(sharpened);
+  const inkLevel = Math.min(200, percentileOf(normHist, n, 0.01));
   const strength = clamp(opts.strength ?? 55, 0, 100) / 100;
-  // A window whose ink and paper are almost the same value holds no text.
-  const minContrast = 44 - strength * 26;
-  // Where in the paper→ink range the ink starts. Higher strength = a wider band
-  // of grey counts as ink, which brings back a faint pencil line.
+  // Where in the paper→ink range the ink starts, and where it is fully black.
+  // The ramp between them is deliberately wide: it is the antialiased rim of a
+  // glyph, and a scan of printed text has one. A narrow ramp looks "crisp" in a
+  // thumbnail and stamps the letters flat, which is what merged an "rn" into an
+  // "m" back when this was a hard threshold.
   const knee = 0.34 - strength * 0.16;
+  const top = 0.92;
   const ink = new Uint8Array(n);
   for (let i = 0; i < n; i++) {
-    const light = paper[i];
-    const dark = darkest[i];
-    const span = light - dark;
-    if (span < minContrast || light < 28) {
+    const paperHere = paper[i];
+    const span = paperHere - inkLevel;
+    if (span < 24 || paperHere < 32) {
+      // a window with almost no range between paper and ink holds no text
       ink[i] = 0;
       continue;
     }
-    // 0 at the brightest value of the window, 1 at the darkest
-    const v = (light - smooth[i]) / span;
-    // Below the knee nothing is printed; above it the ramp is steep enough for
-    // a crisp edge but still smooth, which is what antialiasing is.
-    const cover = (v - knee) / (0.92 - knee);
-    ink[i] = cover <= 0 ? 0 : cover >= 1 ? 255 : cover * 255;
+    // 0 at the paper's own value, 1 at the page's ink
+    const v = (paperHere - sharpened[i]) / span;
+    if (v <= knee) {
+      ink[i] = 0;
+      continue;
+    }
+    const cover = v >= top ? 1 : (v - knee) / (top - knee);
+    // Below a hair of coverage this is grain on the paper, not a glyph edge:
+    // printing a 5% speck is what makes a clean page look dusty.
+    ink[i] = (cover < 0.06 ? 0 : cover) * 255;
   }
 
   /* Despeckle and expand to RGBA in one pass: a lone dark pixel is grain, never
-     a glyph, so it must not survive as a black dot on white paper. */
+     a glyph, so it must not survive as a black dot on white paper.
+   *
+   * Two rules, because the old single one ate hairlines:
+   *
+   *  - a pixel alone in its *eight*-neighbourhood is grain — remove it. Four
+   *    neighbours are not enough to tell: a diagonal stroke, or a table rule that
+   *    runs at an angle after the warp, has no orthogonal partner either.
+   *  - but only if it is a *weak* speck. A paper hair or a JPEG artefact lands
+   *    somewhere in the ramp; the one-pixel-wide rule of a table is fully black
+   *    in the ink map, and deleting its isolated pixels is exactly what turned a
+   *    rule into a dashed line. */
   for (let y = 0; y < h; y++) {
     const row = y * w;
     const up = y > 0 ? row - w : row;
@@ -1625,12 +1681,22 @@ export function enhance(src: ImageData, opts: EnhanceOpts): ImageData {
     for (let x = 0; x < w; x++) {
       const i = row + x;
       let cover = ink[i];
-      if (cover > 140) {
-        const n0 = ink[i > row ? i - 1 : i];
-        const n1 = ink[i < row + w - 1 ? i + 1 : i];
-        const n2 = ink[up + x];
-        const n3 = ink[down + x];
-        if (n0 <= 140 && n1 <= 140 && n2 <= 140 && n3 <= 140) cover = 0;
+      if (cover > 90) {
+        const left = x > 0 ? i - 1 : i;
+        const right = x < w - 1 ? i + 1 : i;
+        let neighbours = 0;
+        if (ink[left] > 90) neighbours++;
+        if (ink[right] > 90) neighbours++;
+        if (ink[up + x] > 90) neighbours++;
+        if (ink[down + x] > 90) neighbours++;
+        if (ink[up + left] > 90) neighbours++;
+        if (ink[up + right] > 90) neighbours++;
+        if (ink[down + left] > 90) neighbours++;
+        if (ink[down + right] > 90) neighbours++;
+        // a lone mid-grey pixel is grain. A *black* one is a dot in the print, and
+        // a stroke that came out one pixel wide has neighbours anyway.
+        if (neighbours === 0 && cover < 150) cover = 0;
+        else if (neighbours === 1 && cover < 110) cover = 0;
       }
       const v = 255 - cover;
       const p = i * 4;
