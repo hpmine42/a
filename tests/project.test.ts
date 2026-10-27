@@ -63,6 +63,27 @@ describe("selection", () => {
   });
 });
 
+describe("camera top bar", () => {
+  const css = read("src/styles.css");
+  const block = (selector: string) => {
+    const start = css.indexOf(`${selector} {`);
+    expect(start, `${selector} must exist`).toBeGreaterThan(-1);
+    return css.slice(start, css.indexOf("}", start));
+  };
+
+  it("wraps instead of pushing the last chip off the screen", () => {
+    expect(block(".camera-top")).toMatch(/flex-wrap: wrap/);
+    expect(block(".camera-top-right")).toMatch(/flex-wrap: wrap/);
+    // the stage clips to a 26px radius: a chip at a 14px inset looked cut off
+    expect(block(".camera-top")).toMatch(/padding: max\(calc\(18px/);
+  });
+
+  it("shrinks the chips on a narrow phone, but not below a real target", () => {
+    const media = css.slice(css.indexOf("@media (max-width: 479px)"));
+    expect(media.slice(0, 900)).toMatch(/\.camera-top \.control \{[^}]*height: calc\(46px/);
+  });
+});
+
 describe("readme", () => {
   const readme = read("README.md");
 
