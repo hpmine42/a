@@ -159,6 +159,32 @@ describe("saving and restoring a project", () => {
     expect(again.src.width).toBe(240);
   });
 
+  it("never replaces a stored photo with a page that has none", async () => {
+    const page = addPage(photo());
+    scheduleSave(page);
+    await flushSave();
+    expect(await restoreProject()).toBe(1);
+
+    // A record written by an older build, without the photo it needs
+    const bare = {
+      id: 99,
+      name: "scan",
+      quad: page.quad,
+      rotation: 0,
+      optimize: false,
+      thumb: null,
+      src: null,
+    };
+    // writing straight to the store is what a previous version did
+    const fake = memoryStore();
+    await fake.writePage(bare as never);
+    useProjectStore(fake);
+
+    // such a page cannot be opened or exported, so it is not restored at all
+    closeApp();
+    expect(await restoreProject()).toBe(0);
+  });
+
   it("does nothing at all without a store", async () => {
     useProjectStore(null);
     addPage(photo());

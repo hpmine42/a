@@ -7,7 +7,20 @@
  * always there as the answer that works everywhere.
  */
 
-export type ShareOutcome = "shared" | "dismissed" | "unsupported" | "failed";
+export type ShareOutcome =
+  /** The file went into the sheet the user chose. */
+  | "shared"
+  /** The user closed the sheet. Not an error, and not something to announce. */
+  | "dismissed"
+  /** No file sharing on this browser. */
+  | "unsupported"
+  /**
+   * The browser refused because the tap was too long ago — building a PDF takes
+   * seconds, and the permission to share only lasts a moment after a gesture.
+   * The answer is not an error: the file exists now, so the next tap is instant.
+   */
+  | "stale"
+  | "failed";
 
 export function canSharePdf(blob: Blob, filename: string): boolean {
   try {
@@ -51,8 +64,11 @@ export async function sharePdf(blob: Blob, filename: string): Promise<ShareOutco
     });
     return "shared";
   } catch (err) {
+    const name = (err as DOMException)?.name;
     // Cancelling the sheet is not an error the user should see.
-    if ((err as DOMException)?.name === "AbortError") return "dismissed";
+    if (name === "AbortError") return "dismissed";
+    // "Must be handling a user gesture": the build outlived the tap
+    if (name === "NotAllowedError" || name === "SecurityError") return "stale";
     return "failed";
   }
 }

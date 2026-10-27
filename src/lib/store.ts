@@ -330,6 +330,9 @@ export async function flushSave(): Promise<void> {
       dirty.delete(id);
       if (!page) continue;
       const src = await encodeSource(page);
+      // No photo, no record: writing `src: null` would replace a good copy on
+      // disk with a page that can never be opened or exported again.
+      if (!src) continue;
       const record: StoredPage = {
         id: page.id,
         name: page.name,
@@ -369,6 +372,9 @@ export async function restoreProject(): Promise<number> {
   } catch {
     return 0;
   }
+  // Records written before this rule existed can carry no photo at all. They
+  // cannot be opened or exported, so restoring them would only be a broken tile.
+  records = records.filter((record) => Boolean(record.src));
   if (!records.length) return 0;
 
   const order = meta?.ids ?? [];
