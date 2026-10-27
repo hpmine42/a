@@ -411,15 +411,39 @@ describe("capture without a page", () => {
     wrapper.unmount();
   });
 
-  it("keeps the whole photo on request", async () => {
+  it("keeps the whole photo without opening the crop tool", async () => {
     stubDemoFetch();
     const wrapper = mount(App);
     await tick(20);
     await shootDemo(wrapper);
     await choose(wrapper, "Keep the whole photo");
+    await tick(200);
 
+    // "no crop, no straightening" means exactly that: the finished page, no
+    // corner tool in between — cropping stays one tap away in the header
     expect(scan.pages.length).toBe(1);
+    expect(wrapper.find(".editor").exists()).toBe(true);
+    expect(wrapper.find(".corner-editor").exists()).toBe(false);
+    expect(wrapper.find("button.crop-done").exists()).toBe(false);
+    expect(wrapper.find(".paper-canvas").exists()).toBe(true);
+    expect(scan.pages[0].quad[0].x).toBeLessThan(8);
+    wrapper.unmount();
+  });
+
+  it("still lets the whole photo be cropped afterwards", async () => {
+    stubDemoFetch();
+    const wrapper = mount(App);
+    await tick(20);
+    await shootDemo(wrapper);
+    await choose(wrapper, "Keep the whole photo");
+    await tick(200);
+
+    await wrapper.find('button[aria-label="Adjust the corners"]').trigger("click");
+    await tick(50);
+
+    // the corner tool is a step the user asks for, not one they walk into
     expect(wrapper.find(".corner-editor").exists()).toBe(true);
+    expect(wrapper.find("button.crop-done").exists()).toBe(true);
     wrapper.unmount();
   });
 
